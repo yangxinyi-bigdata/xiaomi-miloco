@@ -182,6 +182,10 @@ logs/
 # Download Models
 models/
 
+# Docker runtime data
+docker/data/
+docker/log/
+
 # Database
 *.db
 *.sqlite
@@ -234,4 +238,3 @@ AGENTS.md
 PROJECT.md
 CLAUDE.md
 .claude/
-

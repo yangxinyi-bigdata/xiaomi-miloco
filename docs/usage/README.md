@@ -50,10 +50,7 @@ Execution Action: Required. The action(s) to be executed when the condition is t
 
 Optional settings that allow you to specify the time period and minimum interval for rule triggers.
 1. Trigger Time Period:
-You can select from three options:
-    - All Day
-    - Daytime
-    - Nighttime
+You can select all day or configure one or more custom time ranges. Custom ranges use HH:mm precision and support cross-day ranges such as 22:00-06:30.
 2. Minimum Trigger Interval:
 Set the minimum time interval required between rule triggers.
 
@@ -86,4 +83,3 @@ The startup script will automatically download and configure the default model. 
 3. Example: Select the MCP service type, enter the name, URL, and request headers to successfully connect to a weather MCP. During conversations, selecting the weather MCP allows you to perform weather queries.
 
     <img src="../../assets/images/MCP_Services.png" width="40%" />  <img src="../../assets/images/Use_MCP_Services.png" width="40%" />
-

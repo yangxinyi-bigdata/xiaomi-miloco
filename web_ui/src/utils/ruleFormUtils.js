@@ -10,12 +10,18 @@
  * handle time conversion, cron expression etc.
  */
 
-// trigger period options
-export const TRIGGER_PERIOD_OPTIONS = [
-  { label: '全天', value: 'all_day' },
-  { label: '白天(早6晚6)', value: 'daytime' },
-  { label: '晚上(晚6点0分01秒-第二天早5点59分59秒)', value: 'nighttime' },
+export const TRIGGER_PERIOD_MODES = {
+  ALL_DAY: 'all_day',
+  CUSTOM: 'custom',
+};
+
+// trigger period mode options
+export const TRIGGER_PERIOD_MODE_OPTIONS = [
+  { label: '全天', value: TRIGGER_PERIOD_MODES.ALL_DAY },
+  { label: '自定义时间段', value: TRIGGER_PERIOD_MODES.CUSTOM },
 ];
+
+export const DEFAULT_TRIGGER_TIME_RANGE = { start: '09:00', end: '18:00' };
 
 // trigger interval options (hour, minute, second)
 export const TRIGGER_INTERVAL_OPTIONS = {
@@ -25,59 +31,171 @@ export const TRIGGER_INTERVAL_OPTIONS = {
 };
 
 
+const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+const MINUTES_PER_DAY = 24 * 60;
+
+const formatMinutes = (minutes) => {
+  const normalized = ((minutes % MINUTES_PER_DAY) + MINUTES_PER_DAY) % MINUTES_PER_DAY;
+  const hours = Math.floor(normalized / 60);
+  const mins = normalized % 60;
+  return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+};
+
+const timeToMinutes = (time) => {
+  if (!TIME_PATTERN.test(time)) {
+    return null;
+  }
+  const [hours, minutes] = time.split(':').map(Number);
+  return hours * 60 + minutes;
+};
+
 /**
- * trigger period conversion tool
+ * trigger time range conversion tool
  */
-export const triggerPeriodUtils = {
-  periodToCron: (period) => {
-    switch (period) {
-      case 'all_day':
-        return '* * * * *';
-      case 'daytime':
-        return '* 6-17 * * *';
-      case 'nighttime':
-        return '* 18-23,0-5 * * *';
-      default:
-        return '';
+export const triggerTimeRangeUtils = {
+  parseTimeRange: (range) => {
+    if (!range || typeof range.start !== 'string' || typeof range.end !== 'string') {
+      return null;
     }
+
+    const start = range.start.trim();
+    const end = range.end.trim();
+    const startMinutes = timeToMinutes(start);
+    const endMinutes = timeToMinutes(end);
+
+    if (startMinutes === null || endMinutes === null) {
+      return null;
+    }
+
+    return {
+      start,
+      end,
+      startMinutes,
+      endMinutes,
+    };
   },
 
-  cronToPeriod: (cron) => {
-    if (!cron) {return '';}
+  validateTimeRanges: (ranges) => {
+    if (!Array.isArray(ranges) || ranges.length === 0) {
+      return { valid: false, messageKey: 'timeRangeRequired' };
+    }
+
+    for (const range of ranges) {
+      const parsed = triggerTimeRangeUtils.parseTimeRange(range);
+      if (!parsed) {
+        return { valid: false, messageKey: 'invalidTimeRange' };
+      }
+      if (parsed.startMinutes === parsed.endMinutes) {
+        return { valid: false, messageKey: 'timeRangeSameTime' };
+      }
+    }
+
+    return { valid: true };
+  },
+
+  normalizeTimeRanges: (ranges) => {
+    const validation = triggerTimeRangeUtils.validateTimeRanges(ranges);
+    if (!validation.valid) {
+      return [];
+    }
+
+    const segments = [];
+    ranges.forEach((range) => {
+      const parsed = triggerTimeRangeUtils.parseTimeRange(range);
+      if (parsed.startMinutes < parsed.endMinutes) {
+        segments.push({ start: parsed.startMinutes, end: parsed.endMinutes });
+      } else {
+        segments.push({ start: parsed.startMinutes, end: MINUTES_PER_DAY });
+        segments.push({ start: 0, end: parsed.endMinutes });
+      }
+    });
+
+    const merged = segments
+      .sort((a, b) => a.start - b.start)
+      .reduce((result, segment) => {
+        const previous = result[result.length - 1];
+        if (previous && segment.start <= previous.end) {
+          previous.end = Math.max(previous.end, segment.end);
+        } else {
+          result.push({ ...segment });
+        }
+        return result;
+      }, []);
+
+    if (merged.length === 1 && merged[0].start === 0 && merged[0].end === MINUTES_PER_DAY) {
+      return [];
+    }
+
+    if (
+      merged.length > 1 &&
+      merged[0].start === 0 &&
+      merged[merged.length - 1].end === MINUTES_PER_DAY
+    ) {
+      const first = merged.shift();
+      const last = merged.pop();
+      merged.push({ start: last.start, end: first.end });
+    }
+
+    return merged.map(segment => ({
+      start: formatMinutes(segment.start),
+      end: formatMinutes(segment.end),
+    }));
+  },
+
+  cronToTimeRangeMode: (cron) => {
+    if (!cron) {
+      return {
+        triggerPeriodMode: TRIGGER_PERIOD_MODES.ALL_DAY,
+        triggerTimeRanges: [DEFAULT_TRIGGER_TIME_RANGE],
+      };
+    }
 
     try {
       const parts = cron.split(' ');
-      if (parts.length !== 5) {return '';}
+      if (parts.length !== 5) {
+        return {
+          triggerPeriodMode: TRIGGER_PERIOD_MODES.ALL_DAY,
+          triggerTimeRanges: [DEFAULT_TRIGGER_TIME_RANGE],
+        };
+      }
 
       const [minute, hour, day, month, weekday] = parts;
 
       // check if it is all day
       if (minute === '*' && hour === '*' && day === '*' && month === '*' && weekday === '*') {
-        return 'all_day';
+        return {
+          triggerPeriodMode: TRIGGER_PERIOD_MODES.ALL_DAY,
+          triggerTimeRanges: [DEFAULT_TRIGGER_TIME_RANGE],
+        };
       }
 
       // check if it is daytime (6:00-17:59)
       if (minute === '*' && hour === '6-17' && day === '*' && month === '*' && weekday === '*') {
-        return 'daytime';
+        return {
+          triggerPeriodMode: TRIGGER_PERIOD_MODES.CUSTOM,
+          triggerTimeRanges: [{ start: '06:00', end: '18:00' }],
+        };
       }
 
       // check if it is nighttime (18:00-23:59, 0:00-5:59)
       if (minute === '*' && hour === '18-23,0-5' && day === '*' && month === '*' && weekday === '*') {
-        return 'nighttime';
+        return {
+          triggerPeriodMode: TRIGGER_PERIOD_MODES.CUSTOM,
+          triggerTimeRanges: [{ start: '18:00', end: '06:00' }],
+        };
       }
 
-      // if not match any preset, return empty string
-      return '';
+      return {
+        triggerPeriodMode: TRIGGER_PERIOD_MODES.ALL_DAY,
+        triggerTimeRanges: [DEFAULT_TRIGGER_TIME_RANGE],
+      };
     } catch (error) {
       console.error('Invalid cron expression:', error);
-      return '';
+      return {
+        triggerPeriodMode: TRIGGER_PERIOD_MODES.ALL_DAY,
+        triggerTimeRanges: [DEFAULT_TRIGGER_TIME_RANGE],
+      };
     }
-  },
-
-  // get period option display text
-  getPeriodLabel: (value) => {
-    const option = TRIGGER_PERIOD_OPTIONS.find(opt => opt.value === value);
-    return option ? option.label : '';
   },
 };
 
@@ -150,17 +268,22 @@ export const formDataUtils = {
   // convert form data to submit format
   toSubmitFormat: (formData) => {
     const {
-      triggerPeriod,
+      triggerPeriodMode,
+      triggerTimeRanges,
       triggerIntervalHours,
       triggerIntervalMinutes,
       triggerIntervalSeconds,
       ...otherData
     } = formData;
 
+    const normalizedRanges = triggerPeriodMode === TRIGGER_PERIOD_MODES.CUSTOM
+      ? triggerTimeRangeUtils.normalizeTimeRanges(triggerTimeRanges)
+      : null;
+
     return {
       ...otherData,
-      period: triggerPeriod ? triggerPeriodUtils.periodToCron(triggerPeriod) : triggerPeriodUtils.periodToCron('all_day'),
-
+      period: null,
+      time_ranges: normalizedRanges && normalizedRanges.length > 0 ? normalizedRanges : null,
       interval: triggerIntervalUtils.timeToSeconds(
         triggerIntervalHours || 0,
         triggerIntervalMinutes || 0,
@@ -173,19 +296,32 @@ export const formDataUtils = {
   toFormFormat: (backendData) => {
     const {
       period,
+      time_ranges,
       interval,
       // frequency,
       ...otherData
     } = backendData;
 
     const intervalTime = triggerIntervalUtils.secondsToTime(interval || 2);
+    const hasTimeRangesField = Array.isArray(time_ranges);
+    const normalizedRanges = hasTimeRangesField
+      ? triggerTimeRangeUtils.normalizeTimeRanges(time_ranges)
+      : [];
+    const legacyPeriod = triggerTimeRangeUtils.cronToTimeRangeMode(period);
+    const triggerPeriodMode = hasTimeRangesField
+      ? (normalizedRanges.length > 0 ? TRIGGER_PERIOD_MODES.CUSTOM : TRIGGER_PERIOD_MODES.ALL_DAY)
+      : legacyPeriod.triggerPeriodMode;
+    const triggerTimeRanges = hasTimeRangesField
+      ? (normalizedRanges.length > 0 ? normalizedRanges : [DEFAULT_TRIGGER_TIME_RANGE])
+      : legacyPeriod.triggerTimeRanges;
+
     return {
       ...otherData,
-      triggerPeriod: triggerPeriodUtils.cronToPeriod(period) || 'all_day',
+      triggerPeriodMode,
+      triggerTimeRanges,
       triggerIntervalHours: intervalTime.hours,
       triggerIntervalMinutes: intervalTime.minutes,
       triggerIntervalSeconds: intervalTime.seconds,
     };
   },
 };
-

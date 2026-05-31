@@ -13,7 +13,11 @@ from typing import Dict, OrderedDict
 
 from croniter import croniter
 
-from miloco_server.schema.trigger_schema import TriggerRule, TriggerFrequencyFilter
+from miloco_server.schema.trigger_schema import (
+    TriggerRule,
+    TriggerFrequencyFilter,
+    TriggerTimeRange,
+)
 
 logger = logging.getLogger(name=__name__)
 
@@ -33,9 +37,40 @@ class RuleTriggerFilter:
         """Default rule state."""
         self._trigger_history.setdefault(rule_id, deque(maxlen=filter_frequency))
 
+    def _now_datetime(self) -> datetime.datetime:
+        """Return current local server time."""
+        return datetime.datetime.now()
+
+    def _time_to_minutes(self, time_text: str) -> int:
+        """Convert HH:mm to minutes from day start."""
+        hours, minutes = time_text.split(":")
+        return int(hours) * 60 + int(minutes)
+
+    def _match_time_ranges(
+            self,
+            now: datetime.datetime,
+            time_ranges: list[TriggerTimeRange]) -> bool:
+        """Return whether local server time is inside any configured range."""
+        if not time_ranges:
+            return True
+
+        current_minutes = now.hour * 60 + now.minute
+        for time_range in time_ranges:
+            start_minutes = self._time_to_minutes(time_range.start)
+            end_minutes = self._time_to_minutes(time_range.end)
+            if start_minutes < end_minutes:
+                if start_minutes <= current_minutes < end_minutes:
+                    return True
+            elif start_minutes > end_minutes:
+                if current_minutes >= start_minutes or current_minutes < end_minutes:
+                    return True
+
+        return False
+
     def pre_filter(self, rule: TriggerRule) -> bool:
         """Pre Trigger filter."""
-        ts_now = int(datetime.datetime.now().timestamp() * 1000)
+        now_datetime = self._now_datetime()
+        ts_now = int(now_datetime.timestamp() * 1000)
         if not rule.enabled:
             return False
 
@@ -46,9 +81,16 @@ class RuleTriggerFilter:
         self._default_rule_state(rule.id, filter_frequency=frequency)
 
         # Check trigger period
-        cron_expression = rule.filter.period
-        if cron_expression and croniter.is_valid(cron_expression):
-            if not croniter.match(cron_expression, datetime.datetime.fromtimestamp(ts_now/1000)):
+        if rule.filter.time_ranges is not None:
+            if not self._match_time_ranges(now_datetime, rule.filter.time_ranges):
+                logger.info(
+                    "trigger_pre_filter rule-%s: time_ranges: %s mismatch now_timestamp: %d, Not Exec",
+                    rule.id, rule.filter.time_ranges, ts_now)
+                return False
+        else:
+            cron_expression = rule.filter.period
+            if cron_expression and croniter.is_valid(cron_expression) and not croniter.match(
+                    cron_expression, now_datetime):
                 logger.info(
                     "trigger_pre_filter rule-%s: period_cron: %s mismatch now_timestamp: %d, Not Exec",
                     rule.id, cron_expression, ts_now)

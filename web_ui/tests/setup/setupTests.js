@@ -6,10 +6,33 @@
 import '@testing-library/jest-dom';
 import 'whatwg-fetch';
 import { afterAll, afterEach, beforeAll } from 'vitest';
-import { server } from '../mocks/server';
+
+let server;
+
+if (typeof window !== 'undefined' && (
+  !window.localStorage ||
+  typeof window.localStorage.getItem !== 'function'
+)) {
+  const storage = new Map();
+  const localStorageMock = {
+    getItem: (key) => storage.get(key) || null,
+    setItem: (key, value) => storage.set(key, String(value)),
+    removeItem: (key) => storage.delete(key),
+    clear: () => storage.clear(),
+  };
+  Object.defineProperty(window, 'localStorage', {
+    configurable: true,
+    value: localStorageMock,
+  });
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: localStorageMock,
+  });
+}
 
 // Establish API mocking before all tests.
-beforeAll(() => {
+beforeAll(async () => {
+  ({ server } = await import('../mocks/server'));
   server.listen({ onUnhandledRequest: 'error' });
 });
 
@@ -51,4 +74,3 @@ if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
     }),
   });
 }
-

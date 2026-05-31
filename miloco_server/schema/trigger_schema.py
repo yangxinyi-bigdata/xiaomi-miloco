@@ -6,11 +6,12 @@ Trigger data models
 Define trigger-related data structures
 """
 from enum import Enum
+import re
 from typing import Optional, List
 
 from miloco_server.schema.mcp_schema import MCPClientStatus
 from miloco_server.schema.miot_schema import CameraInfo
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class Action(BaseModel):
@@ -73,9 +74,32 @@ class TriggerFrequencyFilter(BaseModel):
     period: int = Field(..., description="Trigger period/seconds")
 
 
+class TriggerTimeRange(BaseModel):
+    """Trigger time range filter data model"""
+    start: str = Field(..., description="Start time, HH:mm")
+    end: str = Field(..., description="End time, HH:mm")
+
+    @field_validator("start", "end")
+    @classmethod
+    def validate_time_format(cls, value: str) -> str:
+        """Validate HH:mm time format."""
+        if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", value):
+            raise ValueError("Time must be in HH:mm format")
+        return value
+
+    @model_validator(mode="after")
+    def validate_range(self):
+        """Reject empty ranges. Cross-day ranges are supported."""
+        if self.start == self.end:
+            raise ValueError("Start time and end time cannot be the same")
+        return self
+
+
 class TriggerFilter(BaseModel):
     """Trigger filter data model"""
     period: Optional[str] = Field(None, description="Trigger time period filter, cron expression")
+    time_ranges: Optional[list[TriggerTimeRange]] = Field(
+        None, description="Trigger time range filters, local server time")
     interval: Optional[int] = Field(None, description="Trigger interval filter/seconds")
     frequency: Optional[TriggerFrequencyFilter] = Field(None, description="Trigger frequency filter")
 

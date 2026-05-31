@@ -4,14 +4,18 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Select, Input, Button, Checkbox, Form, Tooltip, Spin, message, Switch } from 'antd';
-import { QuestionCircleOutlined, ReloadOutlined, UpOutlined, DownOutlined, InfoCircleOutlined } from '@ant-design/icons';
+import { Select, Input, Button, Checkbox, Form, Tooltip, Spin, message, Switch, TimePicker } from 'antd';
+import { QuestionCircleOutlined, ReloadOutlined, UpOutlined, DownOutlined, InfoCircleOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons';
+import dayjs from 'dayjs';
 import { useTranslation } from 'react-i18next';
 import TimeSelector from '@/components/TimeSelector';
 import {
-  TRIGGER_PERIOD_OPTIONS,
+  TRIGGER_PERIOD_MODE_OPTIONS,
+  TRIGGER_PERIOD_MODES,
   TRIGGER_INTERVAL_OPTIONS,
+  DEFAULT_TRIGGER_TIME_RANGE,
   formDataUtils,
+  triggerTimeRangeUtils,
 } from '@/utils/ruleFormUtils';
 import { useRuleFormData, convertFormDataToBackend } from '@/hooks/useRuleFormData';
 import { useRuleFormActions } from '@/hooks/useRuleFormActions';
@@ -81,7 +85,8 @@ const RuleForm = ({
   const [actionDescriptionError, setActionDescriptionError] = useState(false);
 
   const [advancedOptionsVisible, setAdvancedOptionsVisible] = useState(false);
-  const [triggerPeriod, setTriggerPeriod] = useState('all_day');
+  const [triggerPeriodMode, setTriggerPeriodMode] = useState(TRIGGER_PERIOD_MODES.ALL_DAY);
+  const [triggerTimeRanges, setTriggerTimeRanges] = useState([{ ...DEFAULT_TRIGGER_TIME_RANGE }]);
   const [triggerIntervalHours, setTriggerIntervalHours] = useState(0);
   const [triggerIntervalMinutes, setTriggerIntervalMinutes] = useState(0);
   const [triggerIntervalSeconds, setTriggerIntervalSeconds] = useState(2);
@@ -131,11 +136,18 @@ const RuleForm = ({
       }
       if (formData.filter) {
         const filterData = formDataUtils.toFormFormat(formData.filter);
-        setTriggerPeriod(filterData.triggerPeriod || 'all_day');
+        setTriggerPeriodMode(filterData.triggerPeriodMode || TRIGGER_PERIOD_MODES.ALL_DAY);
+        setTriggerTimeRanges(filterData.triggerTimeRanges || [{ ...DEFAULT_TRIGGER_TIME_RANGE }]);
         setTriggerIntervalHours(filterData.triggerIntervalHours || 0);
         setTriggerIntervalMinutes(filterData.triggerIntervalMinutes || 0);
         setTriggerIntervalSeconds(filterData.triggerIntervalSeconds || 2);
         // setAdvancedOptionsVisible(true);
+      } else {
+        setTriggerPeriodMode(TRIGGER_PERIOD_MODES.ALL_DAY);
+        setTriggerTimeRanges([{ ...DEFAULT_TRIGGER_TIME_RANGE }]);
+        setTriggerIntervalHours(0);
+        setTriggerIntervalMinutes(0);
+        setTriggerIntervalSeconds(2);
       }
     }
   }, [mode, formData, form, initialSelectedKeys, selectedActionObjects]);
@@ -239,6 +251,15 @@ const RuleForm = ({
       const camera = cameraOptions.find(c => c.did === did);
       return camera || did;
     });
+
+    if (triggerPeriodMode === TRIGGER_PERIOD_MODES.CUSTOM) {
+      const validation = triggerTimeRangeUtils.validateTimeRanges(triggerTimeRanges);
+      if (!validation.valid) {
+        message.error(t(`smartCenter.${validation.messageKey}`));
+        return false;
+      }
+    }
+
     const formData = {
       name: values.name,
       cameras,
@@ -252,7 +273,8 @@ const RuleForm = ({
         content: notificationText.trim(),
       } : null,
       filter: {
-        triggerPeriod,
+        triggerPeriodMode,
+        triggerTimeRanges,
         triggerIntervalHours,
         triggerIntervalMinutes,
         triggerIntervalSeconds,
@@ -293,6 +315,35 @@ const RuleForm = ({
       setAiRecommendActions([]);
       setAiRecommendExecuteType('dynamic');
     }
+  };
+
+  const getTimePickerValue = (time) => {
+    if (!time) {
+      return null;
+    }
+    return dayjs(time, 'HH:mm');
+  };
+
+  const updateTriggerTimeRange = (index, key, value) => {
+    setTriggerTimeRanges(currentRanges => currentRanges.map((range, rangeIndex) => (
+      rangeIndex === index ? { ...range, [key]: value } : range
+    )));
+  };
+
+  const addTriggerTimeRange = () => {
+    setTriggerTimeRanges(currentRanges => [
+      ...currentRanges,
+      { ...DEFAULT_TRIGGER_TIME_RANGE },
+    ]);
+  };
+
+  const removeTriggerTimeRange = (index) => {
+    setTriggerTimeRanges(currentRanges => {
+      if (currentRanges.length <= 1) {
+        return currentRanges;
+      }
+      return currentRanges.filter((_, rangeIndex) => rangeIndex !== index);
+    });
   };
 
   const isSubmitDisabled = isReadonly || loading;
@@ -538,13 +589,59 @@ const RuleForm = ({
               <div className={styles.advancedOptionLabel}>{t('smartCenter.triggerPeriod')}:</div>
               <Select
                 placeholder={t('smartCenter.nonRequired')}
-                value={triggerPeriod}
-                onChange={setTriggerPeriod}
-                options={TRIGGER_PERIOD_OPTIONS}
+                value={triggerPeriodMode}
+                onChange={setTriggerPeriodMode}
+                options={TRIGGER_PERIOD_MODE_OPTIONS.map(option => ({
+                  ...option,
+                  label: option.value === TRIGGER_PERIOD_MODES.ALL_DAY
+                    ? t('smartCenter.allDay')
+                    : t('smartCenter.customTimeRange'),
+                }))}
                 className={styles.advancedSelect}
-                allowClear
                 disabled={isSubmitDisabled}
               />
+              {triggerPeriodMode === TRIGGER_PERIOD_MODES.CUSTOM && (
+                <div className={styles.timeRangeList}>
+                  {triggerTimeRanges.map((range, index) => (
+                    <div className={styles.timeRangeRow} key={index}>
+                      <TimePicker
+                        value={getTimePickerValue(range.start)}
+                        onChange={(_, timeString) => updateTriggerTimeRange(index, 'start', timeString)}
+                        format="HH:mm"
+                        allowClear={false}
+                        placeholder={t('smartCenter.startTime')}
+                        className={styles.timeRangePicker}
+                        disabled={isSubmitDisabled}
+                      />
+                      <span className={styles.timeRangeSeparator}>-</span>
+                      <TimePicker
+                        value={getTimePickerValue(range.end)}
+                        onChange={(_, timeString) => updateTriggerTimeRange(index, 'end', timeString)}
+                        format="HH:mm"
+                        allowClear={false}
+                        placeholder={t('smartCenter.endTime')}
+                        className={styles.timeRangePicker}
+                        disabled={isSubmitDisabled}
+                      />
+                      <Button
+                        type="text"
+                        icon={<DeleteOutlined />}
+                        onClick={() => removeTriggerTimeRange(index)}
+                        disabled={isSubmitDisabled || triggerTimeRanges.length <= 1}
+                      />
+                    </div>
+                  ))}
+                  <Button
+                    type="dashed"
+                    icon={<PlusOutlined />}
+                    onClick={addTriggerTimeRange}
+                    disabled={isSubmitDisabled}
+                    className={styles.addTimeRangeButton}
+                  >
+                    {t('smartCenter.addTimeRange')}
+                  </Button>
+                </div>
+              )}
             </div>
 
             <div className={styles.advancedOptionItem}>

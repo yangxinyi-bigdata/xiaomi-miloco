@@ -36,6 +36,7 @@ export const deleteSmartRule = (id) => deleteApi(`/api/trigger/rule/${id}`);
 export const getSmartRules = () => getApi('/api/trigger/rules');
 export const executeSceneActions = (data) => postApi('/api/trigger/execute_actions', data);
 export const getRuleTriggerLogs = (limit = 500) => getApi(`/api/trigger/logs?limit=${limit}`);
+export const getRuleTriggerLogStats = () => getApi('/api/trigger/log_stats');
 
 // model API
 export const getAllModels = () => getApi('/api/model');

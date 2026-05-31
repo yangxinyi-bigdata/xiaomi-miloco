@@ -723,6 +723,168 @@ is_service_installed() {
     fi
 }
 
+get_backend_image_from_compose() {
+    local compose_file="${INSTALL_FULL_DIR}/${DOCKER_COMPOSE_FILE}"
+    local backend_image
+
+    if [ ! -f "${compose_file}" ]; then
+        print_error "Docker compose file not found: ${compose_file}"
+        return 1
+    fi
+
+    backend_image=$(${DOCKER_CMD} compose -f "${compose_file}" config 2>/dev/null | awk '
+        /^  backend:/ {
+            in_backend=1
+            next
+        }
+        in_backend && /^  [[:alnum:]_-]+:/ {
+            in_backend=0
+        }
+        in_backend && $1 == "image:" {
+            print $2
+            exit
+        }
+    ')
+
+    if [ -z "${backend_image}" ]; then
+        print_error "Failed to resolve backend image from ${compose_file}"
+        return 1
+    fi
+
+    echo "${backend_image}"
+}
+
+validate_yaml_with_image() {
+    local backend_image="$1"
+    local yaml_file="$2"
+    local yaml_dir
+    local yaml_name
+
+    yaml_dir=$(dirname "${yaml_file}")
+    yaml_name=$(basename "${yaml_file}")
+
+    ${DOCKER_CMD} run --rm \
+        -v "${yaml_dir}:/work/config:ro" \
+        --entrypoint python3 \
+        "${backend_image}" \
+        -c 'import sys, yaml; yaml.safe_load(open(sys.argv[1], encoding="utf-8"))' \
+        "/work/config/${yaml_name}"
+}
+
+backup_config_file() {
+    local config_file="$1"
+    local ts="$2"
+
+    if [ -f "${config_file}" ]; then
+        cp -a "${config_file}" "${config_file}.bak.${ts}"
+        print_info "Backup config file: ${config_file}.bak.${ts}"
+    fi
+}
+
+replace_config_from_image() {
+    local backend_image="$1"
+    local config_name="$2"
+    local ts="$3"
+    local config_dir="${INSTALL_FULL_DIR}/config"
+    local config_file="${config_dir}/${config_name}"
+    local new_file="${config_file}.new"
+
+    mkdir -p "${config_dir}"
+    backup_config_file "${config_file}" "${ts}"
+
+    if ! ${DOCKER_CMD} run --rm --entrypoint cat "${backend_image}" "/app/config/${config_name}" > "${new_file}"; then
+        rm -f "${new_file}"
+        print_error "Failed to extract ${config_name} from backend image: ${backend_image}"
+        return 1
+    fi
+
+    if ! validate_yaml_with_image "${backend_image}" "${new_file}"; then
+        rm -f "${new_file}"
+        print_error "Invalid YAML extracted for ${config_name}"
+        return 1
+    fi
+
+    mv "${new_file}" "${config_file}"
+    print_success "Updated ${config_name} from backend image"
+}
+
+merge_server_config_from_image() {
+    local backend_image="$1"
+    local ts="$2"
+    local config_dir="${INSTALL_FULL_DIR}/config"
+    local config_file="${config_dir}/server_config.yaml"
+    local new_file="${config_file}.new"
+
+    mkdir -p "${config_dir}"
+    backup_config_file "${config_file}" "${ts}"
+
+    if ! ${DOCKER_CMD} run --rm -i \
+        -v "${config_dir}:/work/config" \
+        --entrypoint python3 \
+        "${backend_image}" \
+        - <<'PY'
+import os
+import yaml
+
+image_config_path = "/app/config/server_config.yaml"
+old_config_path = "/work/config/server_config.yaml"
+new_config_path = "/work/config/server_config.yaml.new"
+
+def load_yaml(path):
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+def merge_known_keys(base, old):
+    if isinstance(base, dict) and isinstance(old, dict):
+        return {
+            key: merge_known_keys(value, old[key]) if key in old else value
+            for key, value in base.items()
+        }
+    return old
+
+base_config = load_yaml(image_config_path)
+old_config = load_yaml(old_config_path)
+merged_config = merge_known_keys(base_config, old_config)
+
+with open(new_config_path, "w", encoding="utf-8") as f:
+    yaml.safe_dump(merged_config, f, allow_unicode=True, sort_keys=False)
+PY
+    then
+        rm -f "${new_file}"
+        print_error "Failed to merge server_config.yaml from backend image: ${backend_image}"
+        return 1
+    fi
+
+    if ! validate_yaml_with_image "${backend_image}" "${new_file}"; then
+        rm -f "${new_file}"
+        print_error "Invalid YAML generated for server_config.yaml"
+        return 1
+    fi
+
+    mv "${new_file}" "${config_file}"
+    print_success "Merged server_config.yaml from backend image"
+}
+
+sync_backend_config_files() {
+    local backend_image
+    local ts
+
+    print_log "Syncing backend configuration files..."
+    backend_image=$(get_backend_image_from_compose)
+
+    if ! ${DOCKER_CMD} image inspect "${backend_image}" >/dev/null 2>&1; then
+        print_log "Backend image not found locally, pulling: ${backend_image}"
+        ${DOCKER_CMD} pull "${backend_image}"
+    fi
+
+    ts=$(date +%Y%m%d_%H%M%S)
+    replace_config_from_image "${backend_image}" "prompt_config.yaml" "${ts}"
+    merge_server_config_from_image "${backend_image}" "${ts}"
+    print_success "Backend configuration files synced successfully"
+}
+
 is_service_running() {
     if ! is_service_installed; then
         return 1
@@ -1120,6 +1282,7 @@ start_service() {
     if [ "${INSTALL_FROM}" == "xiaomi-fds" ]; then
         download_docker_images
     fi
+    sync_backend_config_files
     ${DOCKER_CMD} compose -f "${INSTALL_FULL_DIR}/${DOCKER_COMPOSE_FILE}" up -d
     ${DOCKER_CMD} compose -f "${INSTALL_FULL_DIR}/${DOCKER_COMPOSE_FILE}" ps
     print_success "Service started successfully, You can try access the service by clicking on the link below: "
@@ -1147,6 +1310,7 @@ update_service() {
     else
         ${DOCKER_CMD} compose -f "${INSTALL_FULL_DIR}/${DOCKER_COMPOSE_FILE}" pull
     fi
+    sync_backend_config_files
     ${DOCKER_CMD} compose -f "${INSTALL_FULL_DIR}/${DOCKER_COMPOSE_FILE}" down || true
     ${DOCKER_CMD} compose -f "${INSTALL_FULL_DIR}/${DOCKER_COMPOSE_FILE}" up -d
     ${DOCKER_CMD} compose -f "${INSTALL_FULL_DIR}/${DOCKER_COMPOSE_FILE}" ps

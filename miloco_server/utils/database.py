@@ -68,6 +68,8 @@ class SQLiteConnector:
                             "Trigger rule log table not found, creating...")
                         self._create_trigger_rule_log_table(conn)
                         tables_created.append("trigger_rule_log")
+                    else:
+                        self._ensure_trigger_rule_log_columns(conn)
 
                     if "model_vendor" not in existing_tables:
                         logger.info(
@@ -273,6 +275,10 @@ class SQLiteConnector:
                 trigger_rule_condition TEXT NOT NULL,  -- Trigger rule condition
                 camera_condition_results TEXT NOT NULL,  -- JSON format storage for camera trigger condition result list
                 execute_result TEXT,  -- JSON format storage for ExecuteResult object
+                status TEXT DEFAULT 'triggered',  -- triggered/failed/skipped
+                reason_code TEXT,  -- Failure or skipped reason code
+                message TEXT,  -- Failure or skipped detail message
+                dedupe_key TEXT,  -- Write-time dedupe key for failed/skipped logs
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -287,7 +293,41 @@ class SQLiteConnector:
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_trigger_rule_log_created_at ON trigger_rule_log(created_at)"
         )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_trigger_rule_log_status ON trigger_rule_log(status)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_trigger_rule_log_dedupe_key ON trigger_rule_log(dedupe_key)"
+        )
         logger.info("Trigger rule log table created successfully")
+
+    def _ensure_trigger_rule_log_columns(self, conn: sqlite3.Connection) -> None:
+        """Add newly introduced trigger log columns to existing databases."""
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(trigger_rule_log)")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+        column_sql = {
+            "status": "ALTER TABLE trigger_rule_log ADD COLUMN status TEXT DEFAULT 'triggered'",
+            "reason_code": "ALTER TABLE trigger_rule_log ADD COLUMN reason_code TEXT",
+            "message": "ALTER TABLE trigger_rule_log ADD COLUMN message TEXT",
+            "dedupe_key": "ALTER TABLE trigger_rule_log ADD COLUMN dedupe_key TEXT",
+        }
+
+        added_columns = []
+        for column, sql in column_sql.items():
+            if column not in existing_columns:
+                cursor.execute(sql)
+                added_columns.append(column)
+
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_trigger_rule_log_status ON trigger_rule_log(status)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_trigger_rule_log_dedupe_key ON trigger_rule_log(dedupe_key)"
+        )
+        if added_columns:
+            conn.commit()
+            logger.info("Added trigger rule log columns: %s", added_columns)
 
     @contextmanager
     def get_connection(self):

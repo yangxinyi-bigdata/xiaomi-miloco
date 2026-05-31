@@ -79,17 +79,17 @@ vi.mock('antd', async () => {
 });
 
 const mockGetRuleTriggerLogs = vi.fn();
-const mockGetSmartRules = vi.fn();
+const mockGetRuleTriggerLogStats = vi.fn();
 vi.mock('@/api', () => ({
   getRuleTriggerLogs: (...args) => mockGetRuleTriggerLogs(...args),
-  getSmartRules: (...args) => mockGetSmartRules(...args),
+  getRuleTriggerLogStats: (...args) => mockGetRuleTriggerLogStats(...args),
 }));
 
 import LogManage from '@/pages/LogManage';
 
 beforeEach(() => {
   mockGetRuleTriggerLogs.mockReset();
-  mockGetSmartRules.mockReset();
+  mockGetRuleTriggerLogStats.mockReset();
 });
 
 describe('pages/LogManage', () => {
@@ -105,6 +105,7 @@ describe('pages/LogManage', () => {
             timestamp: now,
             trigger_rule_name: 'Rule A',
             trigger_rule_condition: 'if A',
+            status: 'triggered',
             condition_results: [
               {
                 camera_info: { name: 'Cam1' },
@@ -134,11 +135,12 @@ describe('pages/LogManage', () => {
         ],
       },
     });
-    mockGetSmartRules.mockResolvedValueOnce({
-      data: [
-        { enabled: true },
-        { enabled: false },
-      ],
+    mockGetRuleTriggerLogStats.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        total_log_count: 5,
+        enabled_rule_count: 1,
+      },
     });
 
     render(<LogManage />);
@@ -154,25 +156,86 @@ describe('pages/LogManage', () => {
     expect(await screen.findByText(/logManage.sendNotification/)).toBeInTheDocument();
 
     mockGetRuleTriggerLogs.mockResolvedValueOnce({ code: 0, data: { total_items: 5, rule_logs: [] } });
-    mockGetSmartRules.mockResolvedValueOnce({ data: [{ enabled: true }] });
+    mockGetRuleTriggerLogStats.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        total_log_count: 5,
+        enabled_rule_count: 1,
+      },
+    });
 
     const refreshBtn = await screen.findByTestId('icon-refresh');
     fireEvent.click(refreshBtn);
 
     await waitFor(() => {
       expect(mockGetRuleTriggerLogs).toHaveBeenCalledTimes(2);
-      expect(mockGetSmartRules).toHaveBeenCalledTimes(2);
+      expect(mockGetRuleTriggerLogStats).toHaveBeenCalledTimes(2);
     });
   });
 
   it('no data, show empty state', async () => {
     mockGetRuleTriggerLogs.mockResolvedValueOnce({ code: 0, data: { total_items: 0, rule_logs: [] } });
-    mockGetSmartRules.mockResolvedValueOnce({ data: [] });
+    mockGetRuleTriggerLogStats.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        total_log_count: 0,
+        enabled_rule_count: 0,
+      },
+    });
 
     render(<LogManage />);
 
     expect(await screen.findByText('home.menu.logManage')).toBeInTheDocument();
     expect(await screen.findByText('logManage.noRuleRecord')).toBeInTheDocument();
   });
-});
 
+  it('displays failed and skipped log status with diagnostic messages', async () => {
+    const now = Date.now();
+    mockGetRuleTriggerLogs.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        total_items: 2,
+        rule_logs: [
+          {
+            id: 'log-failed',
+            timestamp: now,
+            trigger_rule_name: 'Rule Failed',
+            trigger_rule_condition: 'if failed',
+            condition_results: [],
+            execute_result: null,
+            status: 'failed',
+            reason_code: 'llm_timeout',
+            message: 'LLM call timeout',
+          },
+          {
+            id: 'log-skipped',
+            timestamp: now,
+            trigger_rule_name: 'Rule Skipped',
+            trigger_rule_condition: 'if skipped',
+            condition_results: [],
+            execute_result: null,
+            status: 'skipped',
+            reason_code: 'same_action_skipped',
+            message: 'Same action already happened',
+          },
+        ],
+      },
+    });
+    mockGetRuleTriggerLogStats.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        total_log_count: 2,
+        enabled_rule_count: 1,
+      },
+    });
+
+    render(<LogManage />);
+
+    expect(await screen.findByText('Rule Failed')).toBeInTheDocument();
+    expect(await screen.findByText('Rule Skipped')).toBeInTheDocument();
+    expect(await screen.findByText('LLM call timeout')).toBeInTheDocument();
+    expect(await screen.findByText('Same action already happened')).toBeInTheDocument();
+    expect(await screen.findByText('logManage.statusFailed')).toBeInTheDocument();
+    expect(await screen.findByText('logManage.statusSkipped')).toBeInTheDocument();
+  });
+});

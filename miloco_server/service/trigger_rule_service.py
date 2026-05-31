@@ -241,6 +241,15 @@ class TriggerRuleService:
         logger.info("Retrieved %d trigger rule logs", len(rule_logs))
         return rule_logs, total_items
 
+    async def get_trigger_rule_log_stats(self) -> dict:
+        """Get trigger rule log page statistics."""
+        enabled_rule_count = self._trigger_rule_dao.count_enabled()
+        total_log_count = self._trigger_rule_log_dao.count_all()
+        return {
+            "enabled_rule_count": enabled_rule_count,
+            "total_log_count": total_log_count,
+        }
+
     async def _check_notify(self, notify: Optional[Notify]):
         """Check notification content for filtering"""
         if not notify:

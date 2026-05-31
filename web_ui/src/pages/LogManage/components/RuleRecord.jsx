@@ -4,7 +4,7 @@
  */
 
 import React from 'react';
-import { Table, Empty, Button } from 'antd';
+import { Table, Empty, Button, Tag } from 'antd';
 import { useTranslation } from 'react-i18next';
 import { Card, Icon, LogViewerModal } from '@/components';
 import { useLogViewerStore } from '@/stores/logViewerStore';
@@ -46,12 +46,30 @@ const RuleRecord = () => {
     useLogViewerStore.getState().openModalWithLogId(logId);
   };
 
+  const getStatusMeta = (status) => {
+    const statusMap = {
+      triggered: { color: 'success', text: t('logManage.statusTriggered') },
+      failed: { color: 'error', text: t('logManage.statusFailed') },
+      skipped: { color: 'warning', text: t('logManage.statusSkipped') },
+    };
+    return statusMap[status] || statusMap.triggered;
+  };
+
+  const renderStatus = (item) => {
+    const { status = 'triggered' } = item;
+    const meta = getStatusMeta(status);
+    return <Tag color={meta.color}>{meta.text}</Tag>;
+  };
+
   const renderExecutionResult = (item) => {
     const {
       executionResults,
       notifyResult,
       triggerCondition,
-      isDynamic
+      isDynamic,
+      status,
+      message: logMessage,
+      reasonCode
     } = item;
 
     const allResults = [...executionResults];
@@ -59,6 +77,9 @@ const RuleRecord = () => {
       allResults.push(notifyResult);
     }
 
+    const diagnosticText = status === 'failed' || status === 'skipped'
+      ? (logMessage || reasonCode || t('logManage.noExecutionAction'))
+      : t('logManage.noExecutionAction');
     let executionContent;
 
     if (isDynamic) {
@@ -95,6 +116,7 @@ const RuleRecord = () => {
       executionContent = (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           {actionElements}
+          {!actionElements && !buttonText && diagnosticText}
           {buttonText && (
             <Button
               type="link"
@@ -133,7 +155,7 @@ const RuleRecord = () => {
           </div>
         );
       } else {
-        executionContent = t('logManage.noExecutionAction');
+        executionContent = diagnosticText;
       }
     }
 
@@ -157,6 +179,13 @@ const RuleRecord = () => {
       )
     },
     { title: t('logManage.ruleName'), dataIndex: 'rule', key: 'rule', width: 120 },
+    {
+      title: t('logManage.status'),
+      dataIndex: 'status',
+      key: 'status',
+      width: 90,
+      render: (_, record) => renderStatus(record)
+    },
     {
       title: t('logManage.executionEffect'),
       dataIndex: 'result',

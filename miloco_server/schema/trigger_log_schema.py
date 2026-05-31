@@ -52,6 +52,26 @@ class ExecuteResult(BaseModel):
         None, description="Mi Home send notification result")
 
 
+class TriggerRuleLogStatus:
+    """Trigger rule log status constants."""
+    TRIGGERED = "triggered"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class TriggerRuleLogReason:
+    """Trigger rule log reason code constants."""
+    PRE_FILTER_SKIPPED = "pre_filter_skipped"
+    DYNAMIC_ACTION_RUNNING = "dynamic_action_running"
+    SAME_ACTION_SKIPPED = "same_action_skipped"
+    LLM_TIMEOUT = "llm_timeout"
+    LLM_ERROR = "llm_error"
+    INVALID_LLM_OUTPUT = "invalid_llm_output"
+    ACTION_FAILED = "action_failed"
+    NOTIFY_FAILED = "notify_failed"
+    DYNAMIC_EXECUTE_FAILED = "dynamic_execute_failed"
+
+
 class TriggerRuleLog(BaseModel):
     """Trigger rule execution log model"""
     id: Optional[str] = Field(None, description="Database primary key ID (UUID)")
@@ -63,3 +83,7 @@ class TriggerRuleLog(BaseModel):
         ..., description="Trigger condition result list"
     )
     execute_result: Optional[ExecuteResult] = Field(None, description="Trigger rule execute result")
+    status: str = Field(TriggerRuleLogStatus.TRIGGERED, description="Trigger log status")
+    reason_code: Optional[str] = Field(None, description="Failure or skipped reason code")
+    message: Optional[str] = Field(None, description="Failure or skipped detail message")
+    dedupe_key: Optional[str] = Field(None, description="Write-time dedupe key")

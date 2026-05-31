@@ -7,7 +7,7 @@ Handles trigger-related business logic and data validation
 """
 
 import time
-from typing import Callable, List, Dict, Optional
+from typing import Any, Callable, List, Dict, Optional
 import asyncio
 import logging
 import uuid
@@ -25,7 +25,8 @@ from miloco_server.proxy.miot_proxy import MiotProxy
 from miloco_server.schema.miot_schema import CameraImgPathSeq, CameraImgSeq, CameraInfo
 from miloco_server.schema.trigger_log_schema import (
     AiRecommendDynamicExecuteResult, TriggerConditionResult, ActionExecuteResult,
-    TriggerRuleLog, NotifyResult, ExecuteResult
+    TriggerRuleLog, NotifyResult, ExecuteResult, TriggerRuleLogReason,
+    TriggerRuleLogStatus
 )
 from miloco_server.schema.trigger_schema import (
     Action, TriggerRule, ExecuteType, SendingState
@@ -162,18 +163,39 @@ class TriggerRuleRunner:
     async def _execute_scheduled_task(self):
         start_time = int(time.time() * 1000)
 
-        
+        all_enabled_rules = [
+            (rule_id, rule)
+            for rule_id, rule in self.trigger_rules.items()
+            if rule.enabled
+        ]
+
         llm_proxy = self._get_vision_understaning_llm_proxy()
         if not llm_proxy:
             logger.warning(
                 "Vision understaning LLM proxy not available, skipping rules trigger")
+            for _, rule in all_enabled_rules:
+                await self._log_rule_diagnostic(
+                    start_time,
+                    rule,
+                    TriggerRuleLogStatus.FAILED,
+                    TriggerRuleLogReason.LLM_ERROR,
+                    "Vision understanding LLM proxy not available",
+                )
             return
 
-
-        # Filter triggerable rules
-        enabled_rules = [(rule_id, rule)
-                        for rule_id, rule in self.trigger_rules.items()
-                        if trigger_filter.pre_filter(rule)]
+        # Filter triggerable rules and record business skips.
+        enabled_rules = []
+        for rule_id, rule in all_enabled_rules:
+            if trigger_filter.pre_filter(rule):
+                enabled_rules.append((rule_id, rule))
+            else:
+                await self._log_rule_diagnostic(
+                    start_time,
+                    rule,
+                    TriggerRuleLogStatus.SKIPPED,
+                    TriggerRuleLogReason.PRE_FILTER_SKIPPED,
+                    "Rule skipped by trigger period or frequency filter",
+                )
 
         if not enabled_rules:
             logger.info("No enabled trigger rules to check")
@@ -190,21 +212,50 @@ class TriggerRuleRunner:
                 logger.error(
                     "Rule check failed for %s %s: %s", rule_id, rule.name, condition_result_list
                 )
+                await self._log_rule_diagnostic(
+                    start_time,
+                    rule,
+                    TriggerRuleLogStatus.FAILED,
+                    TriggerRuleLogReason.LLM_ERROR,
+                    f"Rule check failed: {condition_result_list}",
+                )
                 continue
 
-            # Ensure return type is list
-            if not isinstance(condition_result_list, list):
+            # Ensure return type is valid
+            if not isinstance(condition_result_list, dict):
                 logger.error(
                     "Invalid condition result type for rule %s: %s", rule_id, type(condition_result_list)
                 )
+                await self._log_rule_diagnostic(
+                    start_time,
+                    rule,
+                    TriggerRuleLogStatus.FAILED,
+                    TriggerRuleLogReason.LLM_ERROR,
+                    f"Invalid condition result type: {type(condition_result_list)}",
+                )
                 continue
-                
-            execable = any([
-                trigger_filter.post_filter(
-                    rule_id,
-                    condition_result.result)
-                for condition_result in condition_result_list
-            ])
+
+            for diagnostic in condition_result_list.get("diagnostics", []):
+                await self._log_rule_diagnostic(
+                    start_time,
+                    rule,
+                    diagnostic["status"],
+                    diagnostic["reason_code"],
+                    diagnostic["message"],
+                    camera_motion_dict,
+                    diagnostic.get("condition_results") or [],
+                )
+
+            trigger_condition_results = condition_result_list.get("condition_results", [])
+            executable_condition_results = []
+            skipped_by_post_filter = False
+            for condition_result in trigger_condition_results:
+                if trigger_filter.post_filter(rule_id, condition_result.result):
+                    executable_condition_results.append(condition_result)
+                else:
+                    skipped_by_post_filter = True
+
+            execable = bool(executable_condition_results)
 
             is_dynamic_action_running = self._check_dynamic_action_is_running(rule_id)
             logger.info(
@@ -213,12 +264,35 @@ class TriggerRuleRunner:
 
             if execable and not is_dynamic_action_running:
                 execute_id = str(uuid.uuid4())
-                execute_result = await self._execute_trigger_action(
+                execute_result, status, reason_code, message = await self._execute_trigger_action(
                     execute_id, rule, camera_motion_dict)
                 await self._log_rule_execution(execute_id, start_time, rule,
                                                camera_motion_dict,
-                                               condition_result_list,
-                                               execute_result)
+                                               executable_condition_results,
+                                               execute_result,
+                                               status,
+                                               reason_code,
+                                               message)
+            elif execable and is_dynamic_action_running:
+                await self._log_rule_diagnostic(
+                    start_time,
+                    rule,
+                    TriggerRuleLogStatus.SKIPPED,
+                    TriggerRuleLogReason.DYNAMIC_ACTION_RUNNING,
+                    "Dynamic action is still running, skip this trigger",
+                    camera_motion_dict,
+                    executable_condition_results,
+                )
+            elif skipped_by_post_filter:
+                await self._log_rule_diagnostic(
+                    start_time,
+                    rule,
+                    TriggerRuleLogStatus.SKIPPED,
+                    TriggerRuleLogReason.PRE_FILTER_SKIPPED,
+                    "Rule skipped by minimum trigger interval",
+                    camera_motion_dict,
+                    trigger_condition_results,
+                )
 
         logger.info(
             "Scheduled task completed, checked %d trigger rules", len(enabled_rules)
@@ -233,7 +307,10 @@ class TriggerRuleRunner:
                                            tuple[bool,
                                                  Optional[CameraImgSeq]]]],
             condition_result_list: list[TriggerConditionResult],
-            execute_result: Optional[ExecuteResult] = None):
+            execute_result: Optional[ExecuteResult] = None,
+            status: str = TriggerRuleLogStatus.TRIGGERED,
+            reason_code: Optional[str] = None,
+            message: Optional[str] = None):
         """Record rule trigger and execution logs, save to database"""
         logger.info(
             "Rule %s triggered, condition results: %s", rule.name, condition_result_list
@@ -253,6 +330,9 @@ class TriggerRuleRunner:
             trigger_rule_condition=rule.condition,
             condition_results=condition_result_list,
             execute_result=execute_result,
+            status=status,
+            reason_code=reason_code,
+            message=message,
         )
 
         # Save to database
@@ -264,6 +344,52 @@ class TriggerRuleRunner:
         else:
             logger.error(
                 "Failed to save trigger rule log to database: rule_id=%s", rule.id
+            )
+
+    async def _log_rule_diagnostic(
+            self,
+            start_time: int,
+            rule: TriggerRule,
+            status: str,
+            reason_code: str,
+            message: str,
+            camera_motion_dict: Optional[dict[str, dict[int,
+                                           tuple[bool,
+                                                 Optional[CameraImgSeq]]]]] = None,
+            condition_result_list: Optional[list[TriggerConditionResult]] = None):
+        """Record failed or skipped rule diagnostic logs."""
+        condition_results = condition_result_list or []
+        if camera_motion_dict:
+            for condition_result in condition_results:
+                camera_channels = camera_motion_dict.get(condition_result.camera_info.did, {})
+                is_motion, camera_img_seq = camera_channels.get(
+                    condition_result.channel, (False, None))
+                if is_motion and condition_result.result and camera_img_seq:
+                    path_seq: CameraImgPathSeq = await camera_img_seq.store_to_path()
+                    condition_result.images = path_seq.img_list
+
+        trigger_rule_log = TriggerRuleLog(
+            id=str(uuid.uuid4()),
+            timestamp=start_time,
+            trigger_rule_id=rule.id,
+            trigger_rule_name=rule.name,
+            trigger_rule_condition=rule.condition,
+            condition_results=condition_results,
+            execute_result=None,
+            status=status,
+            reason_code=reason_code,
+            message=message,
+        )
+        log_id = self.trigger_rule_log_dao.create(trigger_rule_log)
+        if log_id:
+            logger.info(
+                "Trigger rule diagnostic log saved: id=%s, rule_id=%s, status=%s, reason=%s",
+                log_id, rule.id, status, reason_code
+            )
+        else:
+            logger.error(
+                "Failed to save trigger rule diagnostic log: rule_id=%s, status=%s, reason=%s",
+                rule.id, status, reason_code
             )
 
     def start_periodic_task(self):
@@ -331,21 +457,38 @@ class TriggerRuleRunner:
                                            tuple[bool,
                                                  Optional[CameraImgSeq]]]],
         camera_info_dict: dict[str,
-                               CameraInfo]) -> List[TriggerConditionResult]:
+                               CameraInfo]) -> dict[str, list[Any]]:
 
         cameras_video: dict[tuple[str, int], CameraImgSeq] = {}
         condition_result_list: List[TriggerConditionResult] = []
+        diagnostics: list[dict[str, Any]] = []
         start_time = time.time()
 
         sending_state = self._sending_states.get(rule.id)
         if sending_state and sending_state.flag and start_time - sending_state.time < TRIGGER_RULE_RUNNER_CONFIG["request_timeout_seconds"]:
             logger.info("%s %s Rule %s is sending, skip", start_time, rule.name, rule.id)
-            return []
+            return {
+                "condition_results": [],
+                "diagnostics": [{
+                    "status": TriggerRuleLogStatus.SKIPPED,
+                    "reason_code": TriggerRuleLogReason.DYNAMIC_ACTION_RUNNING,
+                    "message": "Previous rule condition check is still running",
+                    "condition_results": [],
+                }],
+            }
         logger.info("%s %s Rule %s start check", start_time, rule.name, rule.id)
         self._sending_states[rule.id] = SendingState(flag=True, time=start_time)
 
         try:
             for camera_id in rule.cameras:
+                if camera_id not in camera_info_dict:
+                    diagnostics.append({
+                        "status": TriggerRuleLogStatus.FAILED,
+                        "reason_code": TriggerRuleLogReason.LLM_ERROR,
+                        "message": f"Camera info not found: {camera_id}",
+                        "condition_results": [],
+                    })
+                    continue
                 camera_info = camera_info_dict[camera_id]
                 channel_motion_dict = camera_motion_dict[camera_id]
                 for channel, (if_motion,
@@ -374,10 +517,21 @@ class TriggerRuleRunner:
                                                 responses):
                 logger.info("Rule %s %s Camera %s channel %s LLM response: %s", rule.id, rule.name, camera_id, channel, response)
 
-                if isinstance(response, TimeoutError):
+                condition_result = TriggerConditionResult(
+                    camera_info=camera_info_dict[camera_id],
+                    channel=channel,
+                    result=False)
+
+                if isinstance(response, (asyncio.TimeoutError, TimeoutError)):
                     logger.error(
                         "LLM call timeout for camera %s channel %s", camera_id, channel
                     )
+                    diagnostics.append({
+                        "status": TriggerRuleLogStatus.FAILED,
+                        "reason_code": TriggerRuleLogReason.LLM_TIMEOUT,
+                        "message": f"LLM call timeout for camera {camera_id} channel {channel}",
+                        "condition_results": [condition_result],
+                    })
                     continue
 
                 # Check for exceptions
@@ -385,6 +539,12 @@ class TriggerRuleRunner:
                     logger.error(
                         "LLM call failed for camera %s channel %s: %s", camera_id, channel, response
                     )
+                    diagnostics.append({
+                        "status": TriggerRuleLogStatus.FAILED,
+                        "reason_code": TriggerRuleLogReason.LLM_ERROR,
+                        "message": f"LLM call failed for camera {camera_id} channel {channel}: {response}",
+                        "condition_results": [condition_result],
+                    })
                     continue
 
                 # Ensure response is dict type before accessing
@@ -392,9 +552,15 @@ class TriggerRuleRunner:
                     logger.error(
                         "Invalid response type for camera %s channel %s: %s", camera_id, channel, type(response)
                     )
+                    diagnostics.append({
+                        "status": TriggerRuleLogStatus.FAILED,
+                        "reason_code": TriggerRuleLogReason.LLM_ERROR,
+                        "message": f"Invalid LLM response type for camera {camera_id} channel {channel}: {type(response)}",
+                        "condition_results": [condition_result],
+                    })
                     continue
 
-                content = response["content"]
+                content = response.get("content")
                 
                 logger.info(
                     "Condition result, rule name: %s, rule condition: %s, camera_id: %s, channel: %s, content: %s",
@@ -402,6 +568,12 @@ class TriggerRuleRunner:
                 )
 
                 if not content:
+                    diagnostics.append({
+                        "status": TriggerRuleLogStatus.FAILED,
+                        "reason_code": TriggerRuleLogReason.INVALID_LLM_OUTPUT,
+                        "message": f"Empty LLM output for camera {camera_id} channel {channel}",
+                        "condition_results": [condition_result],
+                    })
                     continue
 
                 parsed = self._parse_llm_output(content)
@@ -410,6 +582,12 @@ class TriggerRuleRunner:
                         "Invalid LLM output for rule %s camera %s channel %s: "
                         "expected 0/1/2, got: %s",
                         rule.name, camera_id, channel, content)
+                    diagnostics.append({
+                        "status": TriggerRuleLogStatus.FAILED,
+                        "reason_code": TriggerRuleLogReason.INVALID_LLM_OUTPUT,
+                        "message": f"Invalid LLM output for camera {camera_id} channel {channel}: expected 0/1/2, got {content}",
+                        "condition_results": [condition_result],
+                    })
                     continue
 
                 is_happened, is_same_action = parsed
@@ -438,13 +616,22 @@ class TriggerRuleRunner:
                         "Rule %s camera %s channel %s: action triggered, but is not a new action (No execution needed) (output 2), only update cache",
                         rule.name, camera_id, channel)
                     self._last_happened_cache[(rule.id, camera_id, channel)] = camera_img_seq
+                    diagnostics.append({
+                        "status": TriggerRuleLogStatus.SKIPPED,
+                        "reason_code": TriggerRuleLogReason.SAME_ACTION_SKIPPED,
+                        "message": f"Same action already happened for camera {camera_id} channel {channel}",
+                        "condition_results": [condition_result],
+                    })
                     continue
 
         finally:
             end_time = time.time()
             self._sending_states[rule.id] = SendingState(flag=False, time=end_time)
-            
-        return condition_result_list
+
+        return {
+            "condition_results": condition_result_list,
+            "diagnostics": diagnostics,
+        }
 
     def _check_camera_motion(self, camera_img_seq: CameraImgSeq) -> bool:
         """Detect motion in images"""
@@ -458,24 +645,30 @@ class TriggerRuleRunner:
         camera_motion_dict: dict[str, dict[int,
                                            tuple[bool,
                                                  Optional[CameraImgSeq]]]]
-    ) -> Optional[ExecuteResult]:
+    ) -> tuple[Optional[ExecuteResult], str, Optional[str], Optional[str]]:
         """Execute trigger action"""
         logger.info("[%s] Executing trigger action: %s", execute_id, rule.name)
 
         if not rule.execute_info:
-            return None
+            return None, TriggerRuleLogStatus.TRIGGERED, None, None
 
         execute_type = rule.execute_info.ai_recommend_execute_type
         ai_recommend_action_execute_results = None
         ai_recommend_dynamic_execute_result = None
         automation_action_execute_results = None
         notify_result = None
+        failure_reason_code = None
+        failure_messages = []
 
         # Handle STATIC action type
         if execute_type == ExecuteType.STATIC and rule.execute_info.ai_recommend_actions:
             ai_recommend_action_execute_results = []
             for action in rule.execute_info.ai_recommend_actions:
                 result = await self.execute_action(action)
+                if not result:
+                    failure_reason_code = TriggerRuleLogReason.ACTION_FAILED
+                    failure_messages.append(
+                        f"MCP action failed: {action.mcp_server_name}.{action.mcp_tool_name}")
                 ai_recommend_action_execute_results.append(
                     ActionExecuteResult(action=action, result=result))
 
@@ -497,28 +690,52 @@ class TriggerRuleRunner:
             automation_action_execute_results = []
             for action in rule.execute_info.automation_actions:
                 result = await self.execute_action(action)
+                if not result:
+                    failure_reason_code = TriggerRuleLogReason.ACTION_FAILED
+                    failure_messages.append(
+                        f"Automation action failed: {action.mcp_server_name}.{action.mcp_tool_name}")
                 automation_action_execute_results.append(
                     ActionExecuteResult(action=action, result=result))
 
         # Send MiOT notification
         if rule.execute_info.notify:
-            notify_res = await self.miot_proxy.send_app_notify(rule.execute_info.notify.id)
+            try:
+                notify_res = await self.miot_proxy.send_app_notify(rule.execute_info.notify.id)
+            except Exception as err:  # pylint: disable=broad-except
+                notify_res = False
+                logger.error("Send miot notify failed: %s, notify: %s", err, rule.execute_info.notify)
+                failure_messages.append(f"Mi Home notification failed: {err}")
+            else:
+                if not notify_res:
+                    failure_messages.append("Mi Home notification failed")
+            if not notify_res and failure_reason_code is None:
+                failure_reason_code = TriggerRuleLogReason.NOTIFY_FAILED
             logger.info("Send miot notify result: %s, notify: %s", notify_res, rule.execute_info.notify)
             notify_result = NotifyResult(notify=rule.execute_info.notify, result=notify_res)
 
-        return ExecuteResult(
+        execute_result = ExecuteResult(
             ai_recommend_execute_type=execute_type,
             ai_recommend_action_execute_results=ai_recommend_action_execute_results,
             ai_recommend_dynamic_execute_result=ai_recommend_dynamic_execute_result,
             automation_action_execute_results=automation_action_execute_results,
             notify_result=notify_result
         )
+        if failure_messages:
+            return (
+                execute_result,
+                TriggerRuleLogStatus.FAILED,
+                failure_reason_code or TriggerRuleLogReason.ACTION_FAILED,
+                "; ".join(failure_messages),
+            )
+        return execute_result, TriggerRuleLogStatus.TRIGGERED, None, None
 
     async def _execute_dynamic_action(self, execute_id: str, rule: TriggerRule,
                                     camera_motion_dict: dict[str, dict[int,
                                            tuple[bool,
                                                  Optional[CameraImgSeq]]]]) -> None:
         """Execute dynamic action"""
+        trigger_rule_dynamic_executor = None
+        created_dynamic_executor = None
         try:
             logger.info("[%s] Executing dynamic action: %s", execute_id, rule.name)
             trigger_rule_dynamic_executor = trigger_rule_dynamic_executor_cache.get(rule.id)
@@ -526,22 +743,42 @@ class TriggerRuleRunner:
                 logger.error(
                     "[%s] Dynamic executor already exists pass it, trigger_rule: %s",
                     execute_id, rule.name)
+                self.trigger_rule_log_dao.update_status(
+                    execute_id,
+                    TriggerRuleLogStatus.SKIPPED,
+                    TriggerRuleLogReason.DYNAMIC_ACTION_RUNNING,
+                    "Dynamic executor already exists",
+                )
                 return
 
-            trigger_rule_dynamic_executor = actor_system.createActor(
+            created_dynamic_executor = actor_system.createActor(
                 lambda: TriggerRuleDynamicExecutor(
                     execute_id, rule, self.trigger_rule_log_dao, camera_motion_dict))
+            trigger_rule_dynamic_executor = created_dynamic_executor
             trigger_rule_dynamic_executor_cache[rule.id] = trigger_rule_dynamic_executor
             future = actor_system.ask(trigger_rule_dynamic_executor, START, timeout=5)
             result = await asyncio.wait_for(future, timeout=300)
             logger.info("[%s] Dynamic executor executed, result: %s", execute_id, result)
         except asyncio.TimeoutError as exc:
             logger.error("[%s] Dynamic executor timeout: %s", execute_id, exc)
+            self.trigger_rule_log_dao.update_status(
+                execute_id,
+                TriggerRuleLogStatus.FAILED,
+                TriggerRuleLogReason.DYNAMIC_EXECUTE_FAILED,
+                f"Dynamic executor timeout: {exc}",
+            )
         except Exception as e:  # pylint: disable=broad-except
             logger.error("[%s] Dynamic executor error: %s", execute_id, e)
+            self.trigger_rule_log_dao.update_status(
+                execute_id,
+                TriggerRuleLogStatus.FAILED,
+                TriggerRuleLogReason.DYNAMIC_EXECUTE_FAILED,
+                f"Dynamic executor error: {e}",
+            )
         finally:
-            actor_system.tell(trigger_rule_dynamic_executor, ActorExitRequest())
-            trigger_rule_dynamic_executor_cache.pop(rule.id, None)
+            if created_dynamic_executor:
+                actor_system.tell(created_dynamic_executor, ActorExitRequest())
+                trigger_rule_dynamic_executor_cache.pop(rule.id, None)
 
     async def execute_action(self, action: Action) -> bool:
         """Execute MCP action"""

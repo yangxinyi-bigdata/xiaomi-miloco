@@ -13,6 +13,9 @@ import { config } from './config.js';
 // https://vite.dev/config/
 export default defineConfig(({ command }) => {
   const isDev = command === 'serve';
+  const httpsKeyPath = 'certs/localhost-key.pem';
+  const httpsCertPath = 'certs/localhost.pem';
+  const hasHttpsCerts = fs.existsSync(httpsKeyPath) && fs.existsSync(httpsCertPath);
   
   return {
     plugins: [react()],
@@ -64,10 +67,10 @@ export default defineConfig(({ command }) => {
     server: {
       host: "0.0.0.0",
       // only enable HTTPS in development mode
-      ...(isDev && {
+      ...(isDev && hasHttpsCerts && {
         https: {
-          key: fs.readFileSync('certs/localhost-key.pem'),
-          cert: fs.readFileSync('certs/localhost.pem')
+          key: fs.readFileSync(httpsKeyPath),
+          cert: fs.readFileSync(httpsCertPath)
         }
       }),
       proxy: {

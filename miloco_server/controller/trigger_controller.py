@@ -136,6 +136,20 @@ async def get_trigger_rule_logs(
     )
 
 
+@router.get("/log_stats", summary="Get Trigger Rule Log Stats", response_model=NormalResponse)
+async def get_trigger_rule_log_stats(
+    current_user: str = Depends(verify_token)
+):
+    """Get trigger rule log page statistics."""
+    logger.info("Get trigger rule log stats API called - User: %s", current_user)
+    stats = await manager.trigger_rule_service.get_trigger_rule_log_stats()
+    return NormalResponse(
+        code=0,
+        message="Trigger rule log stats retrieved successfully",
+        data=stats
+    )
+
+
 @router.post(path="/execute_actions", summary="Execute actions", response_model=NormalResponse)
 async def execute_actions(actions: list[Action], current_user: str = Depends(verify_token)):
     """Execute actions"""

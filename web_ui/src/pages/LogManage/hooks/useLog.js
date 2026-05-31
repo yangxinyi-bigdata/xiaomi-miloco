@@ -6,7 +6,7 @@
 import { useState, useEffect } from 'react';
 import { message } from 'antd';
 import { useTranslation } from 'react-i18next';
-import { getRuleTriggerLogs, getSmartRules } from '@/api';
+import { getRuleTriggerLogs, getRuleTriggerLogStats } from '@/api';
 
 /**
  * useLog Hook - log management related business logic
@@ -43,7 +43,10 @@ const useLog = () => {
         trigger_rule_name,
         trigger_rule_condition,
         condition_results = [],
-        execute_result = null
+        execute_result = null,
+        status = 'triggered',
+        reason_code = '',
+        message: logMessage = ''
       } = item;
 
       const safeExecuteResult = execute_result || {};
@@ -142,6 +145,9 @@ const useLog = () => {
         isDynamic,
         dynamicExecuteResult,
         aiRecommendActionDescriptions,
+        status,
+        reasonCode: reason_code,
+        message: logMessage,
         rawData: item
       });
     });
@@ -155,10 +161,9 @@ const useLog = () => {
     try {
       const response = await getRuleTriggerLogs();
       if (response?.code === 0) {
-        const { rule_logs = [], total_items = 0 } = response?.data || {};
+        const { rule_logs = [] } = response?.data || {};
         const parseData = parseDataFun(rule_logs || []);
         setRecordData(parseData);
-        setTotalItems(total_items);
       } else {
         message.error(response?.message || t('logManage.fetchRuleTriggerListFailed'));
       }
@@ -168,16 +173,20 @@ const useLog = () => {
   };
 
   /**
-   * fetch smart rules list
+   * fetch rule log stats
    */
-  const fetchRules = async () => {
+  const fetchLogStats = async () => {
     try {
-      const ruleList = await getSmartRules();
-      const { data: ruleListData = [] } = ruleList || {};
-      const activeRules = ruleListData.filter(rule => rule.enabled).length;
-      setRulesLength(activeRules);
+      const response = await getRuleTriggerLogStats();
+      if (response?.code === 0) {
+        const { total_log_count = 0, enabled_rule_count = 0 } = response?.data || {};
+        setTotalItems(total_log_count);
+        setRulesLength(enabled_rule_count);
+      } else {
+        message.error(response?.message || t('logManage.fetchRuleTriggerListFailed'));
+      }
     } catch (error) {
-      console.error('fetchRules failed:', error);
+      console.error('fetchLogStats failed:', error);
     }
   };
 
@@ -200,8 +209,7 @@ const useLog = () => {
 
   const initData = async () => {
     setLoading(true);
-    await fetchRuleTriggerList();
-    await fetchRules();
+    await Promise.all([fetchRuleTriggerList(), fetchLogStats()]);
     setLoading(false);
   };
 
@@ -220,7 +228,7 @@ const useLog = () => {
 
     // methods
     fetchRuleTriggerList,
-    fetchRules,
+    fetchLogStats,
     handleImageClick,
     handleCloseImageModal,
     initData

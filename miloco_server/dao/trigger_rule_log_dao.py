@@ -16,6 +16,7 @@ from miloco_server.schema.trigger_log_schema import (
     TriggerRuleLog,
     TriggerConditionResult,
     ExecuteResult,
+    TriggerRuleLogStatus,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,9 +55,46 @@ class TriggerRuleLogDAO:
             trigger_rule_name=data["trigger_rule_name"],
             trigger_rule_condition=data["trigger_rule_condition"],
             condition_results=camera_condition_results,
-            execute_result=execute_result
+            execute_result=execute_result,
+            status=data.get("status") or TriggerRuleLogStatus.TRIGGERED,
+            reason_code=data.get("reason_code"),
+            message=data.get("message"),
+            dedupe_key=data.get("dedupe_key"),
         )
 
+    @staticmethod
+    def _normalize_message(message: Optional[str]) -> str:
+        """Normalize volatile whitespace for duplicate-log matching."""
+        return " ".join(str(message or "").split())
+
+    @classmethod
+    def build_dedupe_key(cls, log: TriggerRuleLog) -> Optional[str]:
+        """Build dedupe key for failed/skipped logs."""
+        if log.status not in {
+            TriggerRuleLogStatus.FAILED,
+            TriggerRuleLogStatus.SKIPPED,
+        }:
+            return None
+        normalized_message = cls._normalize_message(log.message)
+        return "|".join([
+            log.trigger_rule_id,
+            log.status,
+            log.reason_code or "",
+            normalized_message,
+        ])
+
+    def _get_duplicate_log_id(self, dedupe_key: str) -> Optional[str]:
+        """Return existing log ID for a duplicate failed/skipped log."""
+        sql = """
+            SELECT id FROM trigger_rule_log
+            WHERE dedupe_key = ?
+            ORDER BY timestamp DESC
+            LIMIT 1
+        """
+        results = self.db_connector.execute_query(sql, (dedupe_key,))
+        if results:
+            return results[0]["id"]
+        return None
 
     def create(self, log: TriggerRuleLog) -> Optional[str]:
         """
@@ -72,14 +110,28 @@ class TriggerRuleLogDAO:
             if log.id is None:
                 log.id = str(uuid.uuid4())
 
+            log.dedupe_key = log.dedupe_key or self.build_dedupe_key(log)
+            if log.dedupe_key:
+                duplicate_log_id = self._get_duplicate_log_id(log.dedupe_key)
+                if duplicate_log_id:
+                    logger.info(
+                        "Skip duplicate trigger rule log: existing_id=%s, rule_id=%s, status=%s, reason_code=%s",
+                        duplicate_log_id, log.trigger_rule_id, log.status, log.reason_code
+                    )
+                    return duplicate_log_id
+
             if (log.execute_result and
                 log.execute_result.ai_recommend_dynamic_execute_result and
                 log.execute_result.ai_recommend_dynamic_execute_result.chat_history_session):
                 log.execute_result.ai_recommend_dynamic_execute_result.chat_history_session.zip_toast_stream()
 
             sql = """
-                INSERT INTO trigger_rule_log (id, timestamp, trigger_rule_id, trigger_rule_name, trigger_rule_condition, camera_condition_results, execute_result)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO trigger_rule_log (
+                    id, timestamp, trigger_rule_id, trigger_rule_name,
+                    trigger_rule_condition, camera_condition_results, execute_result,
+                    status, reason_code, message, dedupe_key
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
             params = (
                 log.id,
@@ -88,7 +140,11 @@ class TriggerRuleLogDAO:
                 log.trigger_rule_name,
                 log.trigger_rule_condition,
                 json.dumps([result.model_dump(mode="json") for result in log.condition_results]),
-                json.dumps(log.execute_result.model_dump(mode="json")) if log.execute_result else None
+                json.dumps(log.execute_result.model_dump(mode="json")) if log.execute_result else None,
+                log.status,
+                log.reason_code,
+                log.message,
+                log.dedupe_key,
             )
 
             with self.db_connector.get_connection() as conn:
@@ -339,6 +395,64 @@ class TriggerRuleLogDAO:
 
         except (ValueError, TypeError, KeyError, AttributeError) as e:
             logger.error("Error updating execute result: id=%s, error=%s", log_id, e)
+            return False
+
+    def update_status(
+        self,
+        log_id: str,
+        status: str,
+        reason_code: Optional[str] = None,
+        message: Optional[str] = None,
+    ) -> bool:
+        """Update status fields for specified log ID."""
+        try:
+            dedupe_key = None
+            if status in {TriggerRuleLogStatus.FAILED, TriggerRuleLogStatus.SKIPPED}:
+                current_rows = self.db_connector.execute_query(
+                    "SELECT trigger_rule_id FROM trigger_rule_log WHERE id = ?",
+                    (log_id,)
+                )
+                if not current_rows:
+                    logger.warning("Trigger rule log not found for status update: id=%s", log_id)
+                    return False
+
+                dedupe_key = "|".join([
+                    current_rows[0]["trigger_rule_id"],
+                    status,
+                    reason_code or "",
+                    self._normalize_message(message),
+                ])
+                duplicate_rows = self.db_connector.execute_query(
+                    """
+                    SELECT id FROM trigger_rule_log
+                    WHERE dedupe_key = ? AND id != ?
+                    LIMIT 1
+                    """,
+                    (dedupe_key, log_id)
+                )
+                if duplicate_rows:
+                    self.delete_by_id(log_id)
+                    logger.info(
+                        "Deleted duplicate trigger rule log after status update: id=%s, duplicate_id=%s",
+                        log_id, duplicate_rows[0]["id"]
+                    )
+                    return True
+
+            sql = """
+                UPDATE trigger_rule_log
+                SET status = ?, reason_code = ?, message = ?, dedupe_key = ?
+                WHERE id = ?
+            """
+            params = (status, reason_code, message, dedupe_key, log_id)
+            affected_rows = self.db_connector.execute_update(sql, params)
+            if affected_rows > 0:
+                logger.info("Trigger rule log status updated successfully: id=%s", log_id)
+                return True
+
+            logger.warning("Trigger rule log not found for status update: id=%s", log_id)
+            return False
+        except (ValueError, TypeError, KeyError, AttributeError) as e:
+            logger.error("Error updating trigger rule log status: id=%s, error=%s", log_id, e)
             return False
 
     def get_execute_result(self, log_id: str) -> Tuple[Optional[ExecuteResult], Optional[str]]:
