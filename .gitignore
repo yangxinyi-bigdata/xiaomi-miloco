@@ -182,6 +182,9 @@ logs/
 # Download Models
 models/
 
+# Independent ML training workspaces
+ml/neck_pose_yolo/
+
 # Docker runtime data
 docker/data/
 docker/log/

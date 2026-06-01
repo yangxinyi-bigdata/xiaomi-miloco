@@ -44,6 +44,10 @@ class LLMModelInfo(ThirdPartyModelInfo):
     local: bool = Field(default=False, description="Whether it is a local model")
     loaded: bool = Field(default=False, description="Whether it is loaded")
     estimate_vram_usage: float = Field(default=-1.0, description="Estimated VRAM usage (GB)")
+    provider_type: Optional[str] = Field(default=None, description="Model provider type")
+    editable: bool = Field(default=True, description="Whether model can be edited")
+    deletable: bool = Field(default=True, description="Whether model can be deleted")
+    auth_status: Optional[str] = Field(default=None, description="Provider auth status")
 
     @classmethod
     def from_third_party(cls, third_party_model_info: ThirdPartyModelInfo) -> "LLMModelInfo":
@@ -54,7 +58,10 @@ class LLMModelInfo(ThirdPartyModelInfo):
             api_key=third_party_model_info.api_key,
             local=False,
             loaded=True,
-            estimate_vram_usage=-1.0
+            estimate_vram_usage=-1.0,
+            provider_type="openai_compatible",
+            editable=True,
+            deletable=True,
         )
 
 class ModelsList(BaseModel):
@@ -64,3 +71,7 @@ class ModelsList(BaseModel):
 
 class ModelPurposeInfo(BaseModel):
     type: str = Field(..., description="Model purpose type")
+
+
+class CodexModelTestRequest(BaseModel):
+    model_name: str = Field(..., description="Codex model name")

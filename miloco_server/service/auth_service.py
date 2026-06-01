@@ -39,7 +39,7 @@ class AuthService:
         Check if admin is registered
         """
         logger.info(
-            "is_admin_registered admin_password: %s", self._admin_password)
+            "is_admin_registered: %s", self._admin_password is not None)
         return self._admin_password is not None
 
     def register_admin(self, password: str) -> bool:

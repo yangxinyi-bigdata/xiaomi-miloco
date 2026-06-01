@@ -1,0 +1,24 @@
+services:
+  backend:
+    container_name: miloco-backend
+    image: ${BACKEND_IMAGE:-xiaomi/miloco-backend:local}
+    # MUST be host for MIoT device discovery.
+    network_mode: host
+    expose:
+      - ${BACKEND_PORT:-8000}
+    environment:
+      - BACKEND_HOST=${BACKEND_HOST:-0.0.0.0}
+      - BACKEND_PORT=${BACKEND_PORT:-8000}
+      - AI_ENGINE_HOST=${AI_ENGINE_HOST:-0.0.0.0}
+      - AI_ENGINE_PORT=${AI_ENGINE_PORT:-8001}
+      - BACKEND_LOG_LEVEL=${BACKEND_LOG_LEVEL:-info}
+      - CODEX_HOME=${CODEX_HOME:-/root/.codex}
+      - TZ=${TZ:-Asia/Shanghai}
+    volumes:
+      - ./data:/app/miloco_server/.temp
+      - ./log/backend:/app/miloco_server/.temp/log
+    # Mount your Codex CLI credential directory if you want to reuse a local Codex login.
+    #  - ${CODEX_HOST_HOME:-~/.codex}:${CODEX_HOME:-/root/.codex}:ro
+    restart: unless-stopped
+    healthcheck:
+      disable: true

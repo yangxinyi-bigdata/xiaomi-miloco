@@ -1,0 +1,18 @@
+{
+  ".url": {
+    "xiaomi-miloco-plus.Application": {
+      "noDisplay": false,
+      "allUsers": false,
+      "fileTypes": [],
+      "control": {
+        "accessPerm": "editable"
+      },
+      "title": "Xiaomi Miloco Plus",
+      "icon": "images/icon_{0}.png",
+      "type": "url",
+      "protocol": "https",
+      "port": "${wizard_port}",
+      "url": "/"
+    }
+  }
+}

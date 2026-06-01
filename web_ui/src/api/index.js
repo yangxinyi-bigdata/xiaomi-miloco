@@ -45,6 +45,8 @@ export const getModelDetail = (modelId) => getApi(`/api/model/${modelId}`);
 export const updateModel = (modelId, data) => putApi(`/api/model/${modelId}`, data);
 export const deleteModel = (modelId) => deleteApi(`/api/model/${modelId}`);
 export const getVendorModels = (data) => postApi('/api/model/get_vendor_models', data);
+export const getCodexStatus = () => getApi('/api/model/codex/status');
+export const testCodexModel = (data) => postApi('/api/model/codex/test', data, 60000);
 export const setCurrentModel = (modelId, purpose = '') => getApi(`/api/model/set_current_model?${purpose ? `purpose=${purpose}` : ''}${modelId ? `&model_id=${modelId}` : ''}`);
 export const getModelPurposes = () => getApi('/api/model/model_purposes');
 export const getCudaInfo = () => getApi('/api/model/get_cuda_info');

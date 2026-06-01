@@ -22,7 +22,8 @@ class TriggerRuleConditionPromptBuilder:
     @staticmethod
     def _s_to_time_str(timestamp: int) -> str:
         """Convert millisecond timestamp to YYYY-MM-DD HH:MM:SS format"""
-        return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+        timestamp_seconds = timestamp / 1000 if timestamp > 10_000_000_000 else timestamp
+        return datetime.fromtimestamp(timestamp_seconds).strftime("%Y-%m-%d %H:%M:%S")
 
     @staticmethod
     def build_trigger_rule_prompt(

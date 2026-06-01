@@ -18,7 +18,7 @@ import styles from './index.module.less';
  * @param {React.ReactNode} props.children - Main content to render
  * @returns {JSX.Element} Page content component
  */
-const PageContent = ({Header = null, loading = false, showEmptyContent = false, emptyContentProps = {}, children }) => {
+const PageContent = ({Header = null, loading = false, showEmptyContent = false, emptyContentProps = {}, contentContainerClassName = '', children }) => {
 
   const Content = useMemo(() => {
     if (loading) {
@@ -39,7 +39,7 @@ const PageContent = ({Header = null, loading = false, showEmptyContent = false, 
           </div>
         )}
 
-        <div className={styles.contentContainer}>
+        <div className={`${styles.contentContainer} ${contentContainerClassName}`}>
           {Content}
         </div>
       </div>
@@ -49,4 +49,3 @@ const PageContent = ({Header = null, loading = false, showEmptyContent = false, 
 
 
 export default PageContent;
-

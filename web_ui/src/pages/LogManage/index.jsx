@@ -24,6 +24,7 @@ const LogManage = () => {
           title={t('home.menu.logManage')}
         />
       )}
+      contentContainerClassName={styles.logManageContentContainer}
     >
       <RuleRecord />
     </PageContent>

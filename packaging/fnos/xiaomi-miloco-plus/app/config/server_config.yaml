@@ -1,0 +1,73 @@
+# Miloco Server Configuration
+# Unified management of all server configuration items
+
+# Directory path configuration
+# Storage directory can be overridden by environment variable MILOCO_SERVER_STORAGE_DIR
+# Default to relative path for portability
+directories:
+  templates: "templates"
+  static: "static"
+  storage: ".temp"  # Can be overridden by MILOCO_SERVER_STORAGE_DIR env var
+
+# Database configuration
+database:
+  path: "miloco.db"
+  timeout: 30.0 
+  check_same_thread: false
+  isolation_level: null
+
+# Server configuration
+server:
+  host: "0.0.0.0"
+  port: 8000
+  log_level: "info"
+  enable_console_logging: true
+  enable_file_logging: true
+
+# Application information configuration
+app:
+  title: "Miloco server"
+  service_name: "miloco-server"
+  description: "Miloco server, responsible for scheduling various modules"
+  version: "0.0.1"
+
+# JWT authentication configuration
+jwt:
+  secret_key: "your-super-secret-key-change-this"  # Get from environment variable SECRET_KEY, default to this value
+  algorithm: "HS256"
+  access_token_expire_minutes: 1440  #minutes
+
+# Local model configuration
+local_model:
+  host: "0.0.0.0"
+  port: 8001
+
+# Chat configuration
+chat:
+  agent_max_steps: 10
+  vision_use_img_count: 6
+  chat_history_ttl: 30 #days
+
+# Trigger rule runner configuration
+trigger_rule_runner:
+  interval_seconds: 2
+  vision_use_img_count: 3
+  trigger_rule_log_ttl: 30 #days
+  # Deside the model request timeout seconds in trigger rule decition making
+  # If it always ERROR as timeout, please change your model API provider to a faster one
+  request_timeout_seconds: 30 
+
+# Camera configuration
+camera:
+  frame_interval: 1000 # Unit: Millisecond (ms)
+
+
+# MIoT configuration, default to 'cn', use your MiHome cloud server
+  # 'cn': '中国大陆'
+  # 'de': 'Europe'
+  # 'i2': 'India'
+  # 'ru': 'Russia'
+  # 'sg': 'Singapore'
+  # 'us': 'United States
+miot:
+  cloud_server: "cn"

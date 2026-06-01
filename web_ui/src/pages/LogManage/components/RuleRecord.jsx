@@ -3,7 +3,7 @@
  * This software may be used and distributed according to the terms of the Xiaomi Miloco License Agreement.
  */
 
-import React from 'react';
+import React, { useRef } from 'react';
 import { Table, Empty, Button, Tag } from 'antd';
 import { useTranslation } from 'react-i18next';
 import { Card, Icon, LogViewerModal } from '@/components';
@@ -21,9 +21,14 @@ import useLog from '../hooks/useLog';
  */
 const RuleRecord = () => {
   const { t } = useTranslation();
+  const completedSectionRef = useRef(null);
+  const issueSectionRef = useRef(null);
 
   const {
-    recordData,
+    mainRecordData,
+    issueRecordData,
+    completedCount,
+    errorCount,
     totalItems,
     rulesLength,
     loading,
@@ -46,19 +51,64 @@ const RuleRecord = () => {
     useLogViewerStore.getState().openModalWithLogId(logId);
   };
 
-  const getStatusMeta = (status) => {
-    const statusMap = {
-      triggered: { color: 'success', text: t('logManage.statusTriggered') },
-      failed: { color: 'error', text: t('logManage.statusFailed') },
-      skipped: { color: 'warning', text: t('logManage.statusSkipped') },
-    };
-    return statusMap[status] || statusMap.triggered;
+  const getStatusMeta = (item) => {
+    const { status = 'triggered', reasonCode = '' } = item;
+    if (status === 'triggered') {
+      return { color: 'success', text: t('logManage.statusTriggered') };
+    }
+    if (reasonCode === 'no_condition_match') {
+      return { color: 'processing', text: t('logManage.statusNoConditionMatch') };
+    }
+    if (reasonCode === 'same_action_skipped') {
+      return { color: 'warning', text: t('logManage.statusSameActionSkipped') };
+    }
+    if (status === 'failed') {
+      return { color: 'error', text: t('logManage.statusFailed') };
+    }
+    if (status === 'skipped') {
+      return { color: 'warning', text: t('logManage.statusSkipped') };
+    }
+    return { color: 'default', text: status };
   };
 
   const renderStatus = (item) => {
-    const { status = 'triggered' } = item;
-    const meta = getStatusMeta(status);
+    const meta = getStatusMeta(item);
     return <Tag color={meta.color}>{meta.text}</Tag>;
+  };
+
+  const getModelDecisionText = (item) => {
+    const { status, reasonCode } = item;
+    if (status === 'triggered') {
+      return t('logManage.modelMatched');
+    }
+    if (reasonCode === 'no_condition_match') {
+      return t('logManage.modelNoMatch');
+    }
+    if (reasonCode === 'same_action_skipped') {
+      return t('logManage.modelSameAction');
+    }
+    if (status === 'failed') {
+      return t('logManage.modelCheckFailed');
+    }
+    return t('logManage.modelNotExecuted');
+  };
+
+  const renderModelJudgement = (item) => {
+    const cameraText = item.cameraResults
+      .map(condition => {
+        const cameraName = condition.camera_info?.name || condition.camera_info?.did || t('logManage.unknownCamera');
+        return `${cameraName} ${t('logManage.channel')} ${condition.channel ?? 0}`;
+      })
+      .join(' / ');
+    const reason = item.modelReason || item.message || item.reasonCode || t('logManage.noModelReason');
+
+    return (
+      <div className={styles.judgementCell}>
+        <div className={styles.judgementTitle}>{getModelDecisionText(item)}</div>
+        {cameraText && <div className={styles.judgementMeta}>{cameraText}</div>}
+        <div className={styles.judgementReason}>{reason}</div>
+      </div>
+    );
   };
 
   const renderExecutionResult = (item) => {
@@ -160,11 +210,30 @@ const RuleRecord = () => {
     }
 
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div className={styles.executionCell}>
         <span style={{ fontWeight: 500 }}>{triggerCondition}</span>
         <span>→</span>
         {executionContent}
       </div>
+    );
+  };
+
+  const renderImages = (record) => {
+    if (!record.hasImages) {
+      return (
+        <span className={styles.disabledImageIcon}>
+          <Icon name="ruleRecordImages" size={18} />
+        </span>
+      );
+    }
+
+    return (
+      <Icon
+        onClick={() => handleImageClick(record.cameraResults)}
+        style={{ cursor: 'pointer' }}
+        name="ruleRecordImages"
+        size={18}
+      />
     );
   };
 
@@ -187,6 +256,13 @@ const RuleRecord = () => {
       render: (_, record) => renderStatus(record)
     },
     {
+      title: t('logManage.modelJudgement'),
+      dataIndex: 'modelJudgement',
+      key: 'modelJudgement',
+      width: 280,
+      render: (_, record) => renderModelJudgement(record)
+    },
+    {
       title: t('logManage.executionEffect'),
       dataIndex: 'result',
       key: 'result',
@@ -197,17 +273,48 @@ const RuleRecord = () => {
       dataIndex: 'images',
       key: 'images',
       width: 70,
-      render: (_, record) => (
-        <Icon
-          onClick={() => handleImageClick(record.cameraResults)}
-          style={{ cursor: 'pointer' }}
-          name="ruleRecordImages"
-          size={18}
-        />
-      )
+      render: (_, record) => renderImages(record)
     },
   ];
 
+  const scrollToSection = sectionRef => {
+    sectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const renderRecordTable = (title, dataSource, emptyText, sectionRef, sectionTestId) => (
+    <div ref={sectionRef} className={styles.recordSection} data-testid={sectionTestId}>
+      <Card className={styles.recordCard}>
+        <div className={styles.statList}>
+          <span className={styles.statListTitle}>{title}</span>
+          <div className={styles.update}>
+            <Icon name="refresh" size={16} onClick={initData} />
+          </div>
+        </div>
+
+        <Table
+          columns={recordColumns}
+          dataSource={dataSource}
+          pagination={false}
+          loading={loading}
+          bordered={false}
+          size="small"
+          scroll={{ y: 520 }}
+          className={styles.tableFont}
+          locale={{
+            emptyText: (
+              <div className={styles.emptyState}>
+                <Empty
+                  description={emptyText}
+                  imageStyle={{ width: 75, height: 75 }}
+                  image={EmptyHistory}
+                />
+              </div>
+            ),
+          }}
+        />
+      </Card>
+    </div>
+  );
 
   return (
     <div className={styles.record}>
@@ -227,44 +334,49 @@ const RuleRecord = () => {
 
           <div className={styles.statCardValue}>{rulesLength}</div>
         </Card>
+        <button
+          type="button"
+          className={styles.statCardButton}
+          data-testid="completed-checks-stat"
+          onClick={() => scrollToSection(completedSectionRef)}
+        >
+          <Card className={styles.statCard} contentClassName={styles.statCardContent}>
+            <div className={styles.statCardTitle}>
+              <div className={styles.title}>{t('logManage.completedChecks')}</div>
+              <div className={styles.subtitle}>{t('logManage.completedChecksCount')}</div>
+            </div>
+            <div className={styles.statCardValue}>{completedCount}</div>
+          </Card>
+        </button>
+        <button
+          type="button"
+          className={styles.statCardButton}
+          data-testid="issue-records-stat"
+          onClick={() => scrollToSection(issueSectionRef)}
+        >
+          <Card className={styles.statCard} contentClassName={styles.statCardContent}>
+            <div className={styles.statCardTitle}>
+              <div className={styles.title}>{t('logManage.issueRecords')}</div>
+              <div className={styles.subtitle}>{t('logManage.issueRecordsCount')}</div>
+            </div>
+            <div className={styles.statCardValue}>{errorCount}</div>
+          </Card>
+        </button>
       </div>
-      <Card className={styles.recordCard}>
-        <div className={styles.statList}>
-          <span className={styles.statListTitle}>{t('logManage.recentTriggeredRules')}:</span>
-          <div className={styles.update}>
-            <Icon name="refresh" size={16} onClick={initData} />
-          </div>
-        </div>
-
-        <Table
-          columns={recordColumns}
-          dataSource={recordData}
-          pagination={false}
-          loading={loading}
-          bordered={false}
-          scroll={{ y: 600 }}
-          size="small"
-          className={styles.tableFont}
-          locale={{
-            emptyText: (
-              <div
-                style={{
-                  height: '600px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center'
-                }}
-              >
-                <Empty
-                  description={t('logManage.noRuleRecord')}
-                  imageStyle={{ width: 75, height: 75 }}
-                  image={EmptyHistory}
-                />
-              </div>
-            ),
-          }}
-        />
-      </Card>
+      {renderRecordTable(
+        t('logManage.ruleCheckRecords'),
+        mainRecordData,
+        t('logManage.noRuleRecord'),
+        completedSectionRef,
+        'rule-check-records-section',
+      )}
+      {renderRecordTable(
+        t('logManage.issueRecordTitle'),
+        issueRecordData,
+        t('logManage.noIssueRecord'),
+        issueSectionRef,
+        'issue-records-section',
+      )}
       <ImageRecordModal
         visible={imageModalVisible}
         onCancel={handleCloseImageModal}

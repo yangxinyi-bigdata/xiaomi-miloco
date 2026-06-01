@@ -17,6 +17,8 @@ import { getRuleTriggerLogs, getRuleTriggerLogStats } from '@/api';
 const useLog = () => {
   const { t } = useTranslation();
   const [recordData, setRecordData] = useState([]);
+  const [mainRecordData, setMainRecordData] = useState([]);
+  const [issueRecordData, setIssueRecordData] = useState([]);
   const [totalItems, setTotalItems] = useState(0);
   const [rulesLength, setRulesLength] = useState(0);
   const [imageModalVisible, setImageModalVisible] = useState(false);
@@ -52,14 +54,31 @@ const useLog = () => {
       const safeExecuteResult = execute_result || {};
 
       const cameraResults = (condition_results || []).map(condition => {
-        const { camera_info = {}, channel, result, images = [] } = condition;
+        const {
+          camera_info = {},
+          channel,
+          result,
+          images = [],
+          llm_reason = '',
+          llm_raw_output = '',
+          is_same_action = null
+        } = condition;
         return {
           camera_info,
           channel,
           result,
-          images
+          images,
+          llmReason: llm_reason,
+          llmRawOutput: llm_raw_output,
+          isSameAction: is_same_action
         };
       });
+
+      const modelReasons = cameraResults
+        .map(condition => condition.llmReason)
+        .filter(Boolean);
+      const modelReason = modelReasons[0] || logMessage || '';
+      const hasImages = cameraResults.some(condition => (condition.images || []).length > 0);
 
       const {
         ai_recommend_execute_type = 'static',
@@ -148,11 +167,18 @@ const useLog = () => {
         status,
         reasonCode: reason_code,
         message: logMessage,
+        modelReason,
+        hasImages,
         rawData: item
       });
     });
     return res;
   };
+
+  const isMainRecord = (record) => (
+    record.status === 'triggered' ||
+    record.reasonCode === 'no_condition_match'
+  );
 
   /**
    * fetch rule trigger logs list
@@ -164,6 +190,8 @@ const useLog = () => {
         const { rule_logs = [] } = response?.data || {};
         const parseData = parseDataFun(rule_logs || []);
         setRecordData(parseData);
+        setMainRecordData(parseData.filter(isMainRecord));
+        setIssueRecordData(parseData.filter(item => !isMainRecord(item)));
       } else {
         message.error(response?.message || t('logManage.fetchRuleTriggerListFailed'));
       }
@@ -220,6 +248,10 @@ const useLog = () => {
   return {
     // data
     recordData,
+    mainRecordData,
+    issueRecordData,
+    completedCount: mainRecordData.length,
+    errorCount: issueRecordData.length,
     totalItems,
     rulesLength,
     imageModalVisible,

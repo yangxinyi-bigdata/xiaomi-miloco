@@ -23,8 +23,8 @@ vi.mock('@/components', () => ({
       <div className={contentClassName}>{children}</div>
     </div>
   ),
-  PageContent: ({ Header: HeaderNode, children, showEmptyContent, emptyContentProps }) => (
-    <div data-testid="page-content">
+  PageContent: ({ Header: HeaderNode, children, showEmptyContent, emptyContentProps, contentContainerClassName }) => (
+    <div data-testid="page-content" className={contentContainerClassName}>
       {HeaderNode}
       {showEmptyContent ? (
         <div>{emptyContentProps?.description}</div>
@@ -49,8 +49,8 @@ vi.mock('antd', async () => {
   const actual = await vi.importActual('antd');
   return {
     ...actual,
-    Table: ({ dataSource, columns, locale }) => (
-      <div data-testid="table">
+    Table: ({ dataSource, columns, locale, scroll }) => (
+      <div data-testid="table" data-scroll-y={scroll?.y || ''}>
         {dataSource && dataSource.length > 0 ? (
           <div>
             {dataSource.map((record, index) => (
@@ -80,6 +80,7 @@ vi.mock('antd', async () => {
 
 const mockGetRuleTriggerLogs = vi.fn();
 const mockGetRuleTriggerLogStats = vi.fn();
+const mockScrollIntoView = vi.fn();
 vi.mock('@/api', () => ({
   getRuleTriggerLogs: (...args) => mockGetRuleTriggerLogs(...args),
   getRuleTriggerLogStats: (...args) => mockGetRuleTriggerLogStats(...args),
@@ -90,6 +91,8 @@ import LogManage from '@/pages/LogManage';
 beforeEach(() => {
   mockGetRuleTriggerLogs.mockReset();
   mockGetRuleTriggerLogStats.mockReset();
+  mockScrollIntoView.mockReset();
+  Element.prototype.scrollIntoView = mockScrollIntoView;
 });
 
 describe('pages/LogManage', () => {
@@ -146,9 +149,10 @@ describe('pages/LogManage', () => {
     render(<LogManage />);
 
     expect(await screen.findByText('home.menu.logManage')).toBeInTheDocument();
+    expect((await screen.findByTestId('page-content')).className).toContain('logManageContentContainer');
 
     expect(await screen.findByText('5')).toBeInTheDocument();
-    expect(await screen.findByText('1')).toBeInTheDocument();
+    expect((await screen.findAllByText('1')).length).toBeGreaterThan(0);
 
     expect(await screen.findByText('Rule A')).toBeInTheDocument();
     expect(await screen.findByText('if A')).toBeInTheDocument();
@@ -164,8 +168,8 @@ describe('pages/LogManage', () => {
       },
     });
 
-    const refreshBtn = await screen.findByTestId('icon-refresh');
-    fireEvent.click(refreshBtn);
+    const refreshButtons = await screen.findAllByTestId('icon-refresh');
+    fireEvent.click(refreshButtons[0]);
 
     await waitFor(() => {
       expect(mockGetRuleTriggerLogs).toHaveBeenCalledTimes(2);
@@ -189,13 +193,32 @@ describe('pages/LogManage', () => {
     expect(await screen.findByText('logManage.noRuleRecord')).toBeInTheDocument();
   });
 
-  it('displays failed and skipped log status with diagnostic messages', async () => {
+  it('groups no-match records with completed checks and failed records in the issue section', async () => {
     const now = Date.now();
     mockGetRuleTriggerLogs.mockResolvedValueOnce({
       code: 0,
       data: {
-        total_items: 2,
+        total_items: 3,
         rule_logs: [
+          {
+            id: 'log-no-match',
+            timestamp: now,
+            trigger_rule_name: 'Room Presence',
+            trigger_rule_condition: 'detect whether someone is in the room',
+            condition_results: [
+              {
+                camera_info: { name: 'Living Room Camera' },
+                channel: 0,
+                result: false,
+                llm_reason: 'No person is visible in the scene',
+                images: [{ data: 'http://example.com/no-match.jpg', timestamp: now }],
+              },
+            ],
+            execute_result: null,
+            status: 'skipped',
+            reason_code: 'no_condition_match',
+            message: 'No person is visible in the scene',
+          },
           {
             id: 'log-failed',
             timestamp: now,
@@ -224,18 +247,48 @@ describe('pages/LogManage', () => {
     mockGetRuleTriggerLogStats.mockResolvedValueOnce({
       code: 0,
       data: {
-        total_log_count: 2,
+        total_log_count: 3,
         enabled_rule_count: 1,
       },
     });
 
     render(<LogManage />);
 
+    expect(await screen.findByText('logManage.ruleCheckRecords')).toBeInTheDocument();
+    expect(await screen.findByText('Room Presence')).toBeInTheDocument();
+    expect((await screen.findAllByText('No person is visible in the scene')).length).toBeGreaterThan(0);
+    expect(await screen.findByText('logManage.statusNoConditionMatch')).toBeInTheDocument();
+
+    expect(await screen.findByText('logManage.issueRecordTitle')).toBeInTheDocument();
     expect(await screen.findByText('Rule Failed')).toBeInTheDocument();
     expect(await screen.findByText('Rule Skipped')).toBeInTheDocument();
-    expect(await screen.findByText('LLM call timeout')).toBeInTheDocument();
-    expect(await screen.findByText('Same action already happened')).toBeInTheDocument();
+    expect((await screen.findAllByText('LLM call timeout')).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText('Same action already happened')).length).toBeGreaterThan(0);
     expect(await screen.findByText('logManage.statusFailed')).toBeInTheDocument();
-    expect(await screen.findByText('logManage.statusSkipped')).toBeInTheDocument();
+    expect(await screen.findByText('logManage.statusSameActionSkipped')).toBeInTheDocument();
+  });
+
+  it('renders independent scroll areas and jumps to them from the summary cards', async () => {
+    mockGetRuleTriggerLogs.mockResolvedValueOnce({ code: 0, data: { total_items: 0, rule_logs: [] } });
+    mockGetRuleTriggerLogStats.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        total_log_count: 0,
+        enabled_rule_count: 0,
+      },
+    });
+
+    render(<LogManage />);
+
+    const tables = await screen.findAllByTestId('table');
+    tables.forEach(table => {
+      expect(table.getAttribute('data-scroll-y')).toBe('520');
+    });
+
+    fireEvent.click(screen.getByTestId('completed-checks-stat'));
+    expect(mockScrollIntoView).toHaveBeenLastCalledWith({ behavior: 'smooth', block: 'start' });
+
+    fireEvent.click(screen.getByTestId('issue-records-stat'));
+    expect(mockScrollIntoView).toHaveBeenCalledTimes(2);
   });
 });

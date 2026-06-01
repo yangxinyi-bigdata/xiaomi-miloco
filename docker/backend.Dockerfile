@@ -6,17 +6,23 @@
 # - https://mirrors.aliyun.com/pypi/simple/
 # - https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
 ARG PIP_INDEX_URL=https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+ARG NPM_REGISTRY=https://registry.npmjs.org/
 
 
 ################################################
 # Frontend Builder
 ################################################
 FROM node:20-slim AS frontend-builder
+ARG NPM_REGISTRY
 
 WORKDIR /app
 COPY web_ui/ /app/
 
-RUN npm install
+RUN npm config set registry "${NPM_REGISTRY}" \
+    && npm config set fetch-retries 5 \
+    && npm config set fetch-retry-mintimeout 20000 \
+    && npm config set fetch-retry-maxtimeout 120000 \
+    && npm ci
 RUN npm run build
 
 

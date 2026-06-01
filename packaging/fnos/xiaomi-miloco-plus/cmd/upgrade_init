@@ -1,0 +1,14 @@
+#!/bin/bash
+
+if [ -z "${TRIM_OLD_APPVER}" ]; then
+    exit 0
+fi
+
+MIN_VERSION="0.1.8"
+
+if [ "$(printf '%s\n' "${TRIM_OLD_APPVER}" "${MIN_VERSION}" | sort -V | head -n1)" != "${MIN_VERSION}" ]; then
+    echo "不支持 0.1.8 以下版本升级，请重新安装。" > "${TRIM_TEMP_LOGFILE}"
+    exit 1
+fi
+
+exit 0

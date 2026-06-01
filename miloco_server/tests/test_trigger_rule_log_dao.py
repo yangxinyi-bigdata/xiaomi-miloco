@@ -38,7 +38,7 @@ def _make_log(
     )
 
 
-def test_failed_or_skipped_logs_are_deduplicated_on_write(tmp_path, monkeypatch):
+def test_failed_logs_are_deduplicated_on_write(tmp_path, monkeypatch):
     _setup_temp_database(tmp_path, monkeypatch)
     dao = TriggerRuleLogDAO()
 
@@ -55,6 +55,25 @@ def test_failed_or_skipped_logs_are_deduplicated_on_write(tmp_path, monkeypatch)
 
     assert duplicate_id == first_id
     assert dao.count_all() == 1
+
+
+def test_skipped_logs_are_not_deduplicated(tmp_path, monkeypatch):
+    _setup_temp_database(tmp_path, monkeypatch)
+    dao = TriggerRuleLogDAO()
+
+    first_id = dao.create(_make_log(
+        status=TriggerRuleLogStatus.SKIPPED,
+        reason_code=TriggerRuleLogReason.NO_CONDITION_MATCH,
+        message="No person is visible",
+    ))
+    second_id = dao.create(_make_log(
+        status=TriggerRuleLogStatus.SKIPPED,
+        reason_code=TriggerRuleLogReason.NO_CONDITION_MATCH,
+        message="No person is visible",
+    ))
+
+    assert first_id != second_id
+    assert dao.count_all() == 2
 
 
 def test_triggered_logs_are_not_deduplicated(tmp_path, monkeypatch):

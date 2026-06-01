@@ -124,6 +124,7 @@ const mockSetModelLoad = vi.fn();
 const mockGetModelPurposes = vi.fn();
 const mockSetCurrentModel = vi.fn();
 const mockGetVendorModels = vi.fn();
+const mockGetCodexStatus = vi.fn();
 
 vi.mock('@/api', () => ({
     getAllModels: (...args) => mockGetAllModels(...args),
@@ -135,6 +136,7 @@ vi.mock('@/api', () => ({
     getModelPurposes: (...args) => mockGetModelPurposes(...args),
     setCurrentModel: (...args) => mockSetCurrentModel(...args),
     getVendorModels: (...args) => mockGetVendorModels(...args),
+    getCodexStatus: (...args) => mockGetCodexStatus(...args),
 }));
 
 import { message } from 'antd';
@@ -159,12 +161,14 @@ function setupHappyPathMocks() {
             current_model: { planning: 'cloud-1', vision_understanding: null },
             models: [
                 { id: 'local-1', model_name: 'llama-3', api_key: '', base_url: '', local: true, estimate_vram_usage: 2.5, loaded: false },
+                { id: 'codex-login:gpt-5.5', model_name: 'gpt-5.5', api_key: '', base_url: 'codex://login', local: false, loaded: true, provider_type: 'codex_login', editable: false, deletable: false },
                 { id: 'cloud-1', model_name: 'gpt-4o', api_key: 'k', base_url: 'https://api', local: false, loaded: true },
             ],
         },
     };
 
     mockGetAllModels.mockResolvedValue(modelsResp);
+    mockGetCodexStatus.mockResolvedValue({ code: 0, data: { logged_in: true, codex_home: '/root/.codex' } });
     mockGetCudaInfo.mockResolvedValue({ code: 0, data: { total: 10, free: 8 } });
 }
 
@@ -178,6 +182,7 @@ beforeEach(() => {
     mockGetModelPurposes.mockReset();
     mockSetCurrentModel.mockReset();
     mockGetVendorModels.mockReset();
+    mockGetCodexStatus.mockReset();
     (message.success).mockClear();
     (message.error).mockClear();
 });
@@ -189,7 +194,60 @@ describe('pages/ModelManage', () => {
 
         expect(await screen.findByText('home.menu.modalManage')).toBeInTheDocument();
         expect(await screen.findByText('llama-3')).toBeInTheDocument();
+        expect(await screen.findByText('gpt-5.5')).toBeInTheDocument();
         expect(await screen.findByText('gpt-4o')).toBeInTheDocument();
+    });
+
+    it('renders model sections in cloud, Codex, local order', async () => {
+        setupHappyPathMocks();
+        render(<ModelManage />);
+
+        const cloudTitle = await screen.findByText('modelModal.cloudModels');
+        const codexTitle = await screen.findByText('modelModal.codexModels');
+        const localTitle = await screen.findByText('modelModal.localModels');
+
+        expect(cloudTitle.compareDocumentPosition(codexTitle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(codexTitle.compareDocumentPosition(localTitle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it('renders all cloud models without hiding them behind category scrolling', async () => {
+        const cloudModels = ['gpt-4o', 'qwen-plus', 'deepseek-chat', 'gemini-1.5'].map((name, index) => ({
+            id: `cloud-${index + 1}`,
+            model_name: name,
+            api_key: 'k',
+            base_url: 'https://api',
+            local: false,
+            loaded: true,
+        }));
+        mockGetAllModels.mockResolvedValue({
+            code: 0,
+            data: {
+                current_model_id: 'cloud-1',
+                current_model: { planning: 'cloud-1', vision_understanding: null },
+                models: [
+                    ...cloudModels,
+                    { id: 'codex-login:gpt-5.5', model_name: 'gpt-5.5', api_key: '', base_url: 'codex://login', local: false, loaded: true, provider_type: 'codex_login', editable: false, deletable: false },
+                    { id: 'local-1', model_name: 'llama-3', api_key: '', base_url: '', local: true, estimate_vram_usage: 2.5, loaded: false },
+                ],
+            },
+        });
+        mockGetCodexStatus.mockResolvedValue({ code: 0, data: { logged_in: true, codex_home: '/root/.codex' } });
+        mockGetCudaInfo.mockResolvedValue({ code: 0, data: { total: 10, free: 8 } });
+
+        render(<ModelManage />);
+
+        expect(await screen.findByText('gpt-4o')).toBeInTheDocument();
+        expect(await screen.findByText('qwen-plus')).toBeInTheDocument();
+        expect(await screen.findByText('deepseek-chat')).toBeInTheDocument();
+        expect(await screen.findByText('gemini-1.5')).toBeInTheDocument();
+    });
+
+    it('labels Codex home as runtime credentials instead of account identity', async () => {
+        setupHappyPathMocks();
+        render(<ModelManage />);
+
+        expect(await screen.findByText('modelModal.codexCredentialDir: /root/.codex')).toBeInTheDocument();
+        expect(screen.queryByText('modelModal.codexHome: /root/.codex')).not.toBeInTheDocument();
     });
 
     it('add model (open modal, fill form, submit)', async () => {
@@ -290,4 +348,3 @@ describe('pages/ModelManage', () => {
         });
     });
 });
-

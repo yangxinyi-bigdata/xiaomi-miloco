@@ -1,0 +1,20 @@
+[
+  {
+    "stepTitle": "设置端口",
+    "items": [
+      {
+        "type": "text",
+        "field": "wizard_port",
+        "label": "访问端口",
+        "rules": [
+          {
+            "required": true,
+            "message": "请输入端口号"
+          }
+        ],
+        "options": [],
+        "initValue": "8000"
+      }
+    ]
+  }
+]

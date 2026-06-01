@@ -9,7 +9,15 @@ Implements CRUD interfaces for third-party models
 from fastapi import APIRouter, Depends
 from miloco_server.service.manager import get_manager
 from miloco_server.schema.common_schema import NormalResponse
-from miloco_server.schema.model_schema import ModelsList, ThirdPartyModelCreate, ThirdPartyModelInfo, ThirdPartyModelVendor, ModelPurposeInfo, ModelLoadRequest
+from miloco_server.schema.model_schema import (
+    CodexModelTestRequest,
+    ModelsList,
+    ThirdPartyModelCreate,
+    ThirdPartyModelInfo,
+    ThirdPartyModelVendor,
+    ModelPurposeInfo,
+    ModelLoadRequest,
+)
 from miloco_server.middleware import verify_token
 import logging
 from miloco_server.utils.local_models import ModelPurpose
@@ -144,6 +152,25 @@ async def get_vendor_models(
         message=f"Vendor models retrieved successfully, total {count} models",
         data=result
     )
+
+
+@router.get("/codex/status", summary="Get local Codex login status", response_model=NormalResponse)
+async def get_codex_status(
+    current_user: str = Depends(verify_token)
+):
+    logger.info("Get Codex status API called - User: %s", current_user)
+    result = await manager.model_service.get_codex_status()
+    return NormalResponse(code=0, message="Codex status retrieved successfully", data=result)
+
+
+@router.post("/codex/test", summary="Test local Codex model", response_model=NormalResponse)
+async def test_codex_model(
+    request: CodexModelTestRequest,
+    current_user: str = Depends(verify_token)
+):
+    logger.info("Test Codex model API called - User: %s, model: %s", current_user, request.model_name)
+    result = await manager.model_service.test_codex_model(request.model_name)
+    return NormalResponse(code=0, message="Codex model test completed", data=result)
 
 
 @router.get("/set_current_model",

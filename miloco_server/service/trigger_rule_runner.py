@@ -6,8 +6,9 @@ Trigger business logic service
 Handles trigger-related business logic and data validation
 """
 
+import json
 import time
-from typing import Any, Callable, List, Dict, Optional
+from typing import TYPE_CHECKING, Any, Callable, List, Dict, Optional
 import asyncio
 import logging
 import uuid
@@ -19,9 +20,7 @@ from miloco_server import actor_system
 from miloco_server.config.normal_config import TRIGGER_RULE_RUNNER_CONFIG
 from miloco_server.config.prompt_config import UserLanguage
 from miloco_server.dao.trigger_rule_log_dao import TriggerRuleLogDAO
-from miloco_server.mcp.tool_executor import ToolExecutor
 from miloco_server.proxy.llm_proxy import LLMProxy
-from miloco_server.proxy.miot_proxy import MiotProxy
 from miloco_server.schema.miot_schema import CameraImgPathSeq, CameraImgSeq, CameraInfo
 from miloco_server.schema.trigger_log_schema import (
     AiRecommendDynamicExecuteResult, TriggerConditionResult, ActionExecuteResult,
@@ -31,7 +30,6 @@ from miloco_server.schema.trigger_log_schema import (
 from miloco_server.schema.trigger_schema import (
     Action, TriggerRule, ExecuteType, SendingState
 )
-from miloco_server.utils.check_img_motion import check_camera_motion
 from miloco_server.utils.local_models import ModelPurpose
 from miloco_server.utils.prompt_helper import TriggerRuleConditionPromptBuilder
 from miloco_server.utils.trigger_filter import trigger_filter
@@ -40,14 +38,18 @@ from miloco_server.service.trigger_rule_dynamic_executor import START, TriggerRu
 
 logger = logging.getLogger(name=__name__)
 
+if TYPE_CHECKING:
+    from miloco_server.proxy.miot_proxy import MiotProxy
+    from miloco_server.mcp.tool_executor import ToolExecutor
+
 
 class TriggerRuleRunner:
     """Trigger service class"""
 
-    def __init__(self, trigger_rules: List[TriggerRule], miot_proxy: MiotProxy,
+    def __init__(self, trigger_rules: List[TriggerRule], miot_proxy: "MiotProxy",
                  get_llm_proxy_by_purpose: Callable[[ModelPurpose], LLMProxy],
                  get_language: Callable[[], UserLanguage],
-                 tool_executor: ToolExecutor,
+                 tool_executor: "ToolExecutor",
                  trigger_rule_log_dao: TriggerRuleLogDAO):
 
         self.trigger_rules: Dict[str, TriggerRule] = {
@@ -189,12 +191,9 @@ class TriggerRuleRunner:
             if trigger_filter.pre_filter(rule):
                 enabled_rules.append((rule_id, rule))
             else:
-                await self._log_rule_diagnostic(
-                    start_time,
-                    rule,
-                    TriggerRuleLogStatus.SKIPPED,
-                    TriggerRuleLogReason.PRE_FILTER_SKIPPED,
-                    "Rule skipped by trigger period or frequency filter",
+                logger.info(
+                    "Rule %s skipped by trigger period or frequency filter",
+                    rule_id,
                 )
 
         if not enabled_rules:
@@ -318,7 +317,7 @@ class TriggerRuleRunner:
 
         for condition_result in condition_result_list:
             is_motion, camera_img_seq = camera_motion_dict[condition_result.camera_info.did][condition_result.channel]
-            if is_motion and condition_result.result and camera_img_seq:
+            if is_motion and camera_img_seq:
                 path_seq: CameraImgPathSeq = await camera_img_seq.store_to_path()
                 condition_result.images = path_seq.img_list
 
@@ -364,7 +363,7 @@ class TriggerRuleRunner:
                 camera_channels = camera_motion_dict.get(condition_result.camera_info.did, {})
                 is_motion, camera_img_seq = camera_channels.get(
                     condition_result.channel, (False, None))
-                if is_motion and condition_result.result and camera_img_seq:
+                if is_motion and camera_img_seq:
                     path_seq: CameraImgPathSeq = await camera_img_seq.store_to_path()
                     condition_result.images = path_seq.img_list
 
@@ -432,24 +431,80 @@ class TriggerRuleRunner:
         return await asyncio.wait_for(llm_proxy.async_call_llm(messages), timeout=TRIGGER_RULE_RUNNER_CONFIG["request_timeout_seconds"])
 
     @staticmethod
-    def _parse_llm_output(content) -> Optional[tuple[bool, bool]]:
-        """Parse LLM numeric output (0/1/2) into (is_happened, is_same_action).
+    def _parse_llm_output(content) -> Optional[dict[str, Any]]:
+        """Parse structured or legacy LLM output into a normalized result.
         Returns None if output is invalid."""
         try:
             stripped = str(content).strip()
         except Exception:  # pylint: disable=broad-except
             logger.error("Invalid LLM output: %s", content)
             return None
+
+        def legacy_result(is_happened: bool, is_same_action: bool) -> dict[str, Any]:
+            return {
+                "is_happened": is_happened,
+                "is_same_action": is_same_action,
+                "reason": "",
+                "raw_output": stripped,
+            }
         
         if stripped == "0":
-            return (False, False)
+            return legacy_result(False, False)
         if stripped == "1":
-            return (True, False)
+            return legacy_result(True, False)
         if stripped == "2":
-            return (True, True)
-        else:
-            logger.error("Invalid LLM output: %s", content)
+            return legacy_result(True, True)
+
+        json_text = stripped
+        if json_text.startswith("```"):
+            json_text = json_text.strip("`").strip()
+            if json_text.lower().startswith("json"):
+                json_text = json_text[4:].strip()
+
+        try:
+            parsed_json = json.loads(json_text)
+        except json.JSONDecodeError:
+            start = json_text.find("{")
+            end = json_text.rfind("}")
+            if start >= 0 and end > start:
+                try:
+                    parsed_json = json.loads(json_text[start:end + 1])
+                except json.JSONDecodeError:
+                    logger.error("Invalid LLM output: %s", content)
+                    return None
+            else:
+                logger.error("Invalid LLM output: %s", content)
+                return None
+
+        if not isinstance(parsed_json, dict):
+            logger.error("Invalid LLM output JSON type: %s", type(parsed_json))
             return None
+
+        def parse_bool(value):
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                normalized = value.strip().lower()
+                if normalized == "true":
+                    return True
+                if normalized == "false":
+                    return False
+            return None
+
+        is_happened = parse_bool(parsed_json.get("is_happened"))
+        is_same_action = parse_bool(parsed_json.get("is_same_action"))
+
+        if not isinstance(is_happened, bool) or not isinstance(is_same_action, bool):
+            logger.error("Invalid LLM output fields: %s", content)
+            return None
+
+        reason = parsed_json.get("reason") or parsed_json.get("llm_reason") or ""
+        return {
+            "is_happened": is_happened,
+            "is_same_action": is_same_action,
+            "reason": str(reason).strip(),
+            "raw_output": stripped,
+        }
 
     async def _check_trigger_condition(
         self, rule: TriggerRule, llm_proxy: LLMProxy,
@@ -561,6 +616,7 @@ class TriggerRuleRunner:
                     continue
 
                 content = response.get("content")
+                condition_result.llm_raw_output = "" if content is None else str(content).strip()
                 
                 logger.info(
                     "Condition result, rule name: %s, rule condition: %s, camera_id: %s, channel: %s, content: %s",
@@ -590,13 +646,25 @@ class TriggerRuleRunner:
                     })
                     continue
 
-                is_happened, is_same_action = parsed
+                is_happened = parsed["is_happened"]
+                is_same_action = parsed["is_same_action"]
+                llm_reason = parsed["reason"]
+                condition_result.result = is_happened
+                condition_result.is_same_action = is_same_action
+                condition_result.llm_reason = llm_reason
+                condition_result.llm_raw_output = parsed["raw_output"]
 
                 # Output 0: no action detected
                 if not is_happened:
                     logger.info(
                         "Rule %s camera %s channel %s: no action detected (output 0)",
                         rule.name, camera_id, channel)
+                    diagnostics.append({
+                        "status": TriggerRuleLogStatus.SKIPPED,
+                        "reason_code": TriggerRuleLogReason.NO_CONDITION_MATCH,
+                        "message": llm_reason or f"Condition did not match for camera {camera_id} channel {channel}",
+                        "condition_results": [condition_result],
+                    })
                     continue
 
                 # Output 1: action triggered, and is a new action(execution needed)
@@ -605,9 +673,7 @@ class TriggerRuleRunner:
                         "Rule %s camera %s channel %s: action triggered, and is a new action(execution needed) (output 1), updating cache and returning True",
                         rule.name, camera_id, channel)
                     self._last_happened_cache[(rule.id, camera_id, channel)] = camera_img_seq
-                    condition_result_list.append(TriggerConditionResult(camera_info=camera_info_dict[camera_id],
-                                                channel=channel,
-                                                result=True))
+                    condition_result_list.append(condition_result)
                     continue
 
                 # Output 2 : action triggered, but is not a new action (No execution needed)
@@ -619,7 +685,7 @@ class TriggerRuleRunner:
                     diagnostics.append({
                         "status": TriggerRuleLogStatus.SKIPPED,
                         "reason_code": TriggerRuleLogReason.SAME_ACTION_SKIPPED,
-                        "message": f"Same action already happened for camera {camera_id} channel {channel}",
+                        "message": llm_reason or f"Same action already happened for camera {camera_id} channel {channel}",
                         "condition_results": [condition_result],
                     })
                     continue
@@ -637,6 +703,7 @@ class TriggerRuleRunner:
         """Detect motion in images"""
         if len(camera_img_seq.img_list) < 2:
             return False
+        from miloco_server.utils.check_img_motion import check_camera_motion
         return check_camera_motion(camera_img_seq.img_list[0].data,
                                    camera_img_seq.img_list[-1].data)
 

@@ -9,6 +9,7 @@ import { useTranslation } from 'react-i18next';
 import { ModelModal, Header, PageContent } from '@/components';
 import { ModelServiceCard, ModelConfigCard } from './components';
 import { useModelManagement } from './hooks';
+import styles from './index.module.less';
 
 /**
  * ModelManage Page - Model management page for managing AI models and configurations
@@ -30,6 +31,7 @@ const ModelManage = () => {
     setLLMLoading,
     setLLMOptions,
     cudaInfo,
+    codexStatus,
     modelLoadingStates,
     handleSetModelLoaded,
     openModal,
@@ -86,9 +88,10 @@ const ModelManage = () => {
     <>
       <PageContent
         Header={<Header title={t('home.menu.modalManage')} />}
+        contentContainerClassName={styles.modelManageScrollContainer}
         // loading={loading}
       >
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}>
           <ModelConfigCard models={models} />
           <ModelServiceCard
             models={models}
@@ -96,6 +99,7 @@ const ModelManage = () => {
             onEditModel={handleEditModel}
             onDeleteModel={handleDelete}
             cudaInfo={cudaInfo}
+            codexStatus={codexStatus}
             onSetModelLoaded={handleSetModelLoaded}
             modelLoadingStates={modelLoadingStates}
           // onRefreshModels={fetchModels}

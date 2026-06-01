@@ -1,0 +1,24 @@
+services:
+  backend:
+    container_name: xiaomi-miloco-plus
+    image: ghcr.io/yangxinyi-bigdata/miloco-backend:0.3.4
+    pull_policy: always
+    network_mode: host
+    environment:
+      - BACKEND_HOST=0.0.0.0
+      - BACKEND_PORT=${wizard_port:-8000}
+      - AI_ENGINE_HOST=0.0.0.0
+      - AI_ENGINE_PORT=8001
+      - BACKEND_LOG_LEVEL=info
+      - CODEX_HOME=${CODEX_HOME:-/root/.codex}
+      - TZ=Asia/Shanghai
+    volumes:
+      - ${TRIM_APPDEST_VOL}/@appshare/xiaomi-miloco-plus/data:/app/miloco_server/.temp
+      - ${TRIM_APPDEST_VOL}/@appshare/xiaomi-miloco-plus/log/backend:/app/miloco_server/.temp/log
+      - ${TRIM_APPDEST_VOL}/@appshare/xiaomi-miloco-plus/config/server_config.yaml:/app/config/server_config.yaml
+      - ${TRIM_APPDEST_VOL}/@appshare/xiaomi-miloco-plus/config/prompt_config.yaml:/app/config/prompt_config.yaml
+      - ${CODEX_HOME_HOST:-/root/.codex}:${CODEX_HOME:-/root/.codex}:ro
+      - /home:/home:ro
+    restart: unless-stopped
+    healthcheck:
+      disable: true

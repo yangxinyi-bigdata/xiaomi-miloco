@@ -20,7 +20,7 @@ class KVDao:
     def __init__(self):
         self.db_connector = get_db_connector()
         self.cache = self.get_all_as_dict()
-        logger.info("KVDao init, current: %s", self.cache)
+        logger.info("KVDao init, keys: %s", sorted(self.cache.keys()))
 
 
     def set(self, key: str, value: str) -> bool:
@@ -48,13 +48,13 @@ class KVDao:
             params = (key, value, current_time, current_time)
             affected_rows = self.db_connector.execute_update(sql, params)
             if affected_rows > 0:
-                logger.info("KV set successfully: key=%s, value=%s", key, value)
+                logger.info("KV set successfully: key=%s", key)
                 return True
             else:
-                logger.warning("Failed to set kv: key=%s, value=%s", key, value)
+                logger.warning("Failed to set kv: key=%s", key)
                 return False
         except (ValueError, TypeError, KeyError, AttributeError) as e:
-            logger.error("Error setting kv: key=%s, value=%s, error=%s", key, value, e)
+            logger.error("Error setting kv: key=%s, error=%s", key, e)
             return False
 
     def _get_by_key(self, key: str) -> Optional[Dict[str, Any]]:

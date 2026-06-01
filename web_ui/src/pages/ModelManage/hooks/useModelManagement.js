@@ -6,7 +6,7 @@
 import { useState, useEffect } from 'react';
 import { message } from 'antd';
 import { useTranslation } from 'react-i18next';
-import { getAllModels, deleteModel, createModel, updateModel, getCudaInfo, setModelLoad } from '@/api';
+import { getAllModels, deleteModel, createModel, updateModel, getCudaInfo, setModelLoad, getCodexStatus } from '@/api';
 
 /**
  * useModelManagement - Model management hooks
@@ -21,14 +21,27 @@ export const useModelManagement = () => {
   const [llmOptions, setLLMOptions] = useState([]);
   const [llmLoading, setLLMLoading] = useState(false);
   const [cudaInfo, setCudaInfo] = useState(null);
+  const [codexStatus, setCodexStatus] = useState(null);
   const [modelLoadingStates, setModelLoadingStates] = useState({});
   const [loading, setLoading] = useState(true);
 
   const refreshModels = async () => {
     setLoading(true);
     await fetchModels();
+    await fetchCodexStatus();
     await fetchCudaInfo();
     setLoading(false);
+  };
+
+  const fetchCodexStatus = async () => {
+    try {
+      const res = await getCodexStatus();
+      if (res && res.code === 0) {
+        setCodexStatus(res.data);
+      }
+    } catch (error) {
+      console.error('fetch Codex status failed:', error);
+    }
   };
 
   // fetch CUDA info
@@ -85,6 +98,10 @@ export const useModelManagement = () => {
           local: item.local,
           estimate_vram_usage: item.estimate_vram_usage,
           loaded: item.loaded,
+          providerType: item.provider_type,
+          editable: item.editable,
+          deletable: item.deletable,
+          authStatus: item.auth_status,
         }));
         setModels(modelsFromApi);
         setSelectedModelId(id);
@@ -179,6 +196,7 @@ export const useModelManagement = () => {
     setLLMLoading,
     setLLMOptions,
     cudaInfo,
+    codexStatus,
     modelLoadingStates,
     fetchModels,
     fetchCudaInfo,

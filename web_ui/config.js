@@ -5,7 +5,7 @@
 
 export const config = {
   api: {
-    target: 'https://192.168.31.97:8000/',
+    target: process.env.VITE_DEV_API_TARGET || 'https://127.0.0.1:8000/',
   },
   app: {
     name: 'Miloco',

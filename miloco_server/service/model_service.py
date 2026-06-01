@@ -14,6 +14,18 @@ from miloco_server.utils.local_models import LOCAL_MODEL_ID_PREFIX
 from miloco_server.dao.kv_dao import KVDao, SystemConfigKeys
 from miloco_server.dao.third_party_model_dao import ThirdPartyModelDAO
 from miloco_server.utils.local_models import LocalModels, ModelPurpose
+from miloco_server.proxy.codex_auth import (
+    CODEX_API_KEY_DISPLAY,
+    CODEX_BASE_URL_DISPLAY,
+    CODEX_MODEL_ID_PREFIX,
+    CODEX_PROVIDER_TYPE,
+    codex_model_id,
+    is_codex_model_id,
+    load_available_models as load_codex_available_models,
+    model_name_from_codex_id,
+    safe_status as codex_safe_status,
+)
+from miloco_server.proxy.codex_proxy import CodexProxy
 from miloco_server.proxy.llm_proxy import LLMProxy, OpenAIProxy
 from miloco_server.schema.model_schema import (
     ThirdPartyModelCreate, ThirdPartyModelInfo, LLMModelInfo, ModelsList
@@ -74,8 +86,16 @@ class ModelService:
                 logger.info("Using local model for %s", purpose)
                 model = await self._local_models.get_local_model_from_id(model_id)
                 model = model if model and model.loaded else None
+            elif is_codex_model_id(model_id):
+                if codex_safe_status().get("logged_in"):
+                    model_name = model_name_from_codex_id(model_id)
+                    model = self._build_codex_model_info(model_name)
             else:
-                model = self._third_party_model_dao.get_by_id(model_id)
+                third_party_model = self._third_party_model_dao.get_by_id(model_id)
+                model = (
+                    LLMModelInfo.from_third_party(third_party_model)
+                    if third_party_model else None
+                )
 
             if model:
                 llm_proxy_by_purpose[purpose] = model
@@ -98,14 +118,50 @@ class ModelService:
         # Create and cache LLM proxy
         self._llm_proxy_by_purpose = {
             purpose:
-            OpenAIProxy(base_url=model_info.base_url,
-                        api_key=model_info.api_key,
-                        model_name=model_info.model_name)
+            self._build_llm_proxy(model_info)
             for purpose, model_info in llm_proxy_by_purpose.items()
         }
 
     def get_llm_proxy(self) -> dict[ModelPurpose, LLMProxy]:
         return self._llm_proxy_by_purpose
+
+    @staticmethod
+    def _build_codex_model_info(model_name: str) -> LLMModelInfo:
+        normalized_model = str(model_name or "").strip()
+        return LLMModelInfo(
+            id=codex_model_id(normalized_model),
+            model_name=normalized_model,
+            base_url=CODEX_BASE_URL_DISPLAY,
+            api_key=CODEX_API_KEY_DISPLAY,
+            local=False,
+            loaded=True,
+            estimate_vram_usage=-1.0,
+            provider_type=CODEX_PROVIDER_TYPE,
+            editable=False,
+            deletable=False,
+            auth_status="logged_in",
+        )
+
+    @staticmethod
+    def _build_llm_proxy(model_info: ThirdPartyModelInfo) -> LLMProxy:
+        provider_type = getattr(model_info, "provider_type", None)
+        if provider_type == CODEX_PROVIDER_TYPE or is_codex_model_id(model_info.id):
+            return CodexProxy(model_name=model_info.model_name)
+        return OpenAIProxy(
+            base_url=model_info.base_url,
+            api_key=model_info.api_key,
+            model_name=model_info.model_name,
+        )
+
+    def _get_codex_models(self) -> list[LLMModelInfo]:
+        status = codex_safe_status()
+        if not status.get("logged_in"):
+            return []
+        return [
+            self._build_codex_model_info(model_name)
+            for model_name in load_codex_available_models()
+            if str(model_name or "").strip()
+        ]
 
     async def set_current_model(self, model_id: Optional[str], purpose: ModelPurpose):
         """
@@ -125,7 +181,13 @@ class ModelService:
         if model_id:
             if not model_id.startswith(LOCAL_MODEL_ID_PREFIX):
                 # Check if model exists
-                model = self._third_party_model_dao.get_by_id(model_id)
+                if is_codex_model_id(model_id):
+                    if codex_safe_status().get("logged_in"):
+                        model = self._build_codex_model_info(
+                            model_name_from_codex_id(model_id)
+                        )
+                else:
+                    model = self._third_party_model_dao.get_by_id(model_id)
             else:
                 model = await self._local_models.get_local_model_from_id(model_id)
 
@@ -184,6 +246,7 @@ class ModelService:
         models_response = [
             LLMModelInfo.from_third_party(model) for model in models
         ]
+        models_response.extend(self._get_codex_models())
         cached_local_models = await self._local_models.get_local_models()
         if cached_local_models:
             models_response.extend(cached_local_models)
@@ -214,6 +277,8 @@ class ModelService:
 
         if model_id.startswith(LOCAL_MODEL_ID_PREFIX):
             raise ConflictException("Local models cannot be deleted")
+        if model_id.startswith(CODEX_MODEL_ID_PREFIX):
+            raise ConflictException("Codex login models cannot be deleted")
 
         if not self._third_party_model_dao.exists(model_id):
             raise ResourceNotFoundException("Third-party model does not exist")
@@ -251,6 +316,22 @@ class ModelService:
         except Exception as e:
             logger.error("Failed to get vendor models: %s", str(e))
             raise BusinessException(f"Failed to get vendor models: {str(e)}") from e
+
+    async def get_codex_status(self) -> dict:
+        """Return sanitized local Codex login state and virtual model list."""
+        return codex_safe_status()
+
+    async def test_codex_model(self, model_name: str) -> dict:
+        """Send a short request through a Codex virtual model."""
+        proxy = CodexProxy(model_name=str(model_name or "").strip())
+        result = await proxy.async_call_llm([
+            {"role": "user", "content": "请只回复 ok"}
+        ])
+        return {
+            "success": bool(result.get("success")),
+            "content": result.get("content", ""),
+            "error": result.get("error", ""),
+        }
 
     async def load_or_unload_local_model(self, model_name: str, loaded: bool):
         """load or unload local model"""

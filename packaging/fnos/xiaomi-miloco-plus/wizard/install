@@ -1,0 +1,24 @@
+[
+  {
+    "stepTitle": "设置端口",
+    "items": [
+      {
+        "type": "text",
+        "field": "wizard_port",
+        "label": "访问端口",
+        "rules": [
+          {
+            "required": true,
+            "message": "请输入端口号"
+          }
+        ],
+        "options": [],
+        "initValue": "8000"
+      },
+      {
+        "type": "tips",
+        "helpText": "本安装包仅包含 Miloco 后端和内置 Web UI，不包含 AI 引擎容器。镜像将从 ghcr.io/yangxinyi-bigdata/miloco-backend:0.3.4 拉取。"
+      }
+    ]
+  }
+]

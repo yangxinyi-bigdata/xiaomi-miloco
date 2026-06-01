@@ -1,0 +1,196 @@
+#!/bin/bash
+set -euo pipefail
+
+sync_miloco_config_file_backup() {
+    local config_file="$1"
+    local ts="$2"
+
+    if [ -f "${config_file}" ]; then
+        cp -a "${config_file}" "${config_file}.bak.${ts}"
+    fi
+}
+
+sync_miloco_server_config() {
+    local default_server="$1"
+    local config_server="$2"
+    local new_server="${config_server}.new"
+
+    if [ ! -f "${config_server}" ]; then
+        cp "${default_server}" "${new_server}"
+    else
+        python3 - "${default_server}" "${config_server}" "${new_server}" <<'PY'
+import sys
+import yaml
+
+default_path, old_path, new_path = sys.argv[1:]
+
+def load_yaml(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+def merge_known_keys(base, old):
+    if isinstance(base, dict) and isinstance(old, dict):
+        return {
+            key: merge_known_keys(value, old[key]) if key in old else value
+            for key, value in base.items()
+        }
+    return old
+
+merged = merge_known_keys(load_yaml(default_path), load_yaml(old_path))
+
+with open(new_path, "w", encoding="utf-8") as f:
+    yaml.safe_dump(merged, f, allow_unicode=True, sort_keys=False)
+PY
+    fi
+
+    python3 - "${new_server}" <<'PY'
+import sys
+import yaml
+
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    yaml.safe_load(f)
+PY
+
+    mv "${new_server}" "${config_server}"
+}
+
+sync_miloco_prompt_config() {
+    local default_prompt="$1"
+    local config_prompt="$2"
+    local new_prompt="${config_prompt}.new"
+
+    cp "${default_prompt}" "${new_prompt}"
+    python3 - "${new_prompt}" <<'PY'
+import sys
+import yaml
+
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    yaml.safe_load(f)
+PY
+
+    mv "${new_prompt}" "${config_prompt}"
+}
+
+get_miloco_user_home() {
+    local user="$1"
+    local home_dir=""
+
+    if [ -z "${user}" ] || [ "${user}" = "root" ]; then
+        return 1
+    fi
+
+    if command -v getent >/dev/null 2>&1; then
+        home_dir="$(getent passwd "${user}" | awk -F: '{print $6}' || true)"
+    fi
+
+    if [ -z "${home_dir}" ] && [ -d "/home/${user}" ]; then
+        home_dir="/home/${user}"
+    fi
+
+    if [ -n "${home_dir}" ] && [ -d "${home_dir}" ]; then
+        printf '%s\n' "${home_dir}"
+        return 0
+    fi
+
+    return 1
+}
+
+resolve_miloco_codex_home() {
+    local var_name
+    local user_name
+    local home_dir
+    local codex_dir
+
+    if [ -n "${MILOCO_CODEX_HOME:-}" ]; then
+        printf '%s\n' "${MILOCO_CODEX_HOME}"
+        return 0
+    fi
+
+    for var_name in TRIM_LOGIN_USER TRIM_USERNAME TRIM_USER SUDO_USER LOGNAME USER; do
+        user_name="${!var_name:-}"
+        if home_dir="$(get_miloco_user_home "${user_name}")"; then
+            printf '%s/.codex\n' "${home_dir}"
+            return 0
+        fi
+    done
+
+    if [ -n "${HOME:-}" ] && [ "${HOME}" != "/root" ] && [ -d "${HOME}" ]; then
+        printf '%s/.codex\n' "${HOME}"
+        return 0
+    fi
+
+    for codex_dir in /home/*/.codex; do
+        if [ -d "${codex_dir}" ] && { [ -f "${codex_dir}/auth.json" ] || [ -f "${codex_dir}/config.toml" ]; }; then
+            printf '%s\n' "${codex_dir}"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+set_miloco_env_var() {
+    local env_file="$1"
+    local key="$2"
+    local value="$3"
+    local tmp_file="${env_file}.tmp"
+
+    touch "${env_file}"
+    grep -v "^${key}=" "${env_file}" > "${tmp_file}" || true
+    printf '%s=%s\n' "${key}" "${value}" >> "${tmp_file}"
+    mv "${tmp_file}" "${env_file}"
+}
+
+sync_miloco_docker_env() {
+    local docker_env_file="${TRIM_APPDEST}/docker/.env"
+    local codex_home
+    local backend_port="${wizard_port:-}"
+
+    if [ ! -d "${TRIM_APPDEST}/docker" ]; then
+        return 0
+    fi
+
+    if ! codex_home="$(resolve_miloco_codex_home)"; then
+        codex_home="/root/.codex"
+    fi
+
+    set_miloco_env_var "${docker_env_file}" "CODEX_HOME" "${codex_home}"
+    set_miloco_env_var "${docker_env_file}" "CODEX_HOME_HOST" "${codex_home}"
+
+    if [ -z "${backend_port}" ] && command -v docker >/dev/null 2>&1; then
+        backend_port="$(docker inspect xiaomi-miloco-plus \
+            --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+            | awk -F= '$1 == "BACKEND_PORT" {print $2; exit}' || true)"
+    fi
+
+    if [ -n "${backend_port}" ]; then
+        set_miloco_env_var "${docker_env_file}" "wizard_port" "${backend_port}"
+    fi
+}
+
+sync_miloco_configs() {
+    local config_dir="${TRIM_DATA_SHARE_PATHS}/config"
+    local default_config_dir="${TRIM_APPDEST}/config"
+    local ts
+
+    mkdir -p "${config_dir}"
+    mkdir -p "${TRIM_DATA_SHARE_PATHS}/data"
+    mkdir -p "${TRIM_DATA_SHARE_PATHS}/log/backend"
+    sync_miloco_docker_env
+
+    ts=$(date +%Y%m%d_%H%M%S)
+
+    sync_miloco_config_file_backup "${config_dir}/prompt_config.yaml" "${ts}"
+    sync_miloco_prompt_config \
+        "${default_config_dir}/prompt_config.yaml" \
+        "${config_dir}/prompt_config.yaml"
+
+    sync_miloco_config_file_backup "${config_dir}/server_config.yaml" "${ts}"
+    sync_miloco_server_config \
+        "${default_config_dir}/server_config.yaml" \
+        "${config_dir}/server_config.yaml"
+
+    if [ -f "${default_config_dir}/ai_engine_config.yaml" ] && [ ! -f "${config_dir}/ai_engine_config.yaml" ]; then
+        cp "${default_config_dir}/ai_engine_config.yaml" "${config_dir}/ai_engine_config.yaml"
+    fi
+}

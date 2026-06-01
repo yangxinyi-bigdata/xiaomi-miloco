@@ -1,0 +1,7 @@
+{
+  "defaults": {
+    "run-as": "package"
+  },
+  "username": "docker-xiaomi-miloco-plus",
+  "groupname": "docker-xiaomi-miloco-plus"
+}

@@ -69,11 +69,8 @@ class TriggerRuleLogDAO:
 
     @classmethod
     def build_dedupe_key(cls, log: TriggerRuleLog) -> Optional[str]:
-        """Build dedupe key for failed/skipped logs."""
-        if log.status not in {
-            TriggerRuleLogStatus.FAILED,
-            TriggerRuleLogStatus.SKIPPED,
-        }:
+        """Build dedupe key for failed logs."""
+        if log.status != TriggerRuleLogStatus.FAILED:
             return None
         normalized_message = cls._normalize_message(log.message)
         return "|".join([
@@ -407,7 +404,7 @@ class TriggerRuleLogDAO:
         """Update status fields for specified log ID."""
         try:
             dedupe_key = None
-            if status in {TriggerRuleLogStatus.FAILED, TriggerRuleLogStatus.SKIPPED}:
+            if status == TriggerRuleLogStatus.FAILED:
                 current_rows = self.db_connector.execute_query(
                     "SELECT trigger_rule_id FROM trigger_rule_log WHERE id = ?",
                     (log_id,)

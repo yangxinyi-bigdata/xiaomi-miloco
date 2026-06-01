@@ -1,0 +1,22 @@
+{
+  "docker-project": {
+    "projects": [
+      {
+        "name": "xiaomi-miloco-plus",
+        "path": "docker"
+      }
+    ]
+  },
+  "data-share": {
+    "shares": [
+      {
+        "name": "xiaomi-miloco-plus",
+        "permission": {
+          "rw": [
+            "docker-xiaomi-miloco-plus"
+          ]
+        }
+      }
+    ]
+  }
+}

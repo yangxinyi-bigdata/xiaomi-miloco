@@ -20,6 +20,9 @@ class TriggerConditionResult(BaseModel):
     channel: int = Field(..., description="Channel number")
     result: bool = Field(..., description="Result")
     images: Optional[list[CameraImgInfoPath]] = Field(None, description="Image sequence path")
+    llm_reason: Optional[str] = Field(None, description="LLM judgment reason")
+    llm_raw_output: Optional[str] = Field(None, description="Raw LLM output")
+    is_same_action: Optional[bool] = Field(None, description="Whether the detected event is the same as last time")
 
 
 class ActionExecuteResult(BaseModel):
@@ -62,6 +65,7 @@ class TriggerRuleLogStatus:
 class TriggerRuleLogReason:
     """Trigger rule log reason code constants."""
     PRE_FILTER_SKIPPED = "pre_filter_skipped"
+    NO_CONDITION_MATCH = "no_condition_match"
     DYNAMIC_ACTION_RUNNING = "dynamic_action_running"
     SAME_ACTION_SKIPPED = "same_action_skipped"
     LLM_TIMEOUT = "llm_timeout"
