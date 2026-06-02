@@ -272,6 +272,9 @@ class TriggerRuleRunner:
                                                status,
                                                reason_code,
                                                message)
+                if execute_result and execute_result.ai_recommend_execute_type == ExecuteType.DYNAMIC:
+                    if rule.execute_info.ai_recommend_action_descriptions:
+                        asyncio.create_task(self._execute_dynamic_action(execute_id, rule, camera_motion_dict))
             elif execable and is_dynamic_action_running:
                 await self._log_rule_diagnostic(
                     start_time,
@@ -745,10 +748,7 @@ class TriggerRuleRunner:
                 is_done=False,
                 ai_recommend_action_descriptions=rule.execute_info.ai_recommend_action_descriptions,
                 chat_history_session=None)
-            if rule.execute_info.ai_recommend_action_descriptions:
-                # execute dynamic action in background
-                asyncio.create_task(self._execute_dynamic_action(execute_id, rule, camera_motion_dict))
-            else:
+            if not rule.execute_info.ai_recommend_action_descriptions:
                 ai_recommend_dynamic_execute_result.is_done = True
                 logger.warning("[%s] Dynamic action descriptions not found, skip dynamic action", execute_id)
 

@@ -111,8 +111,12 @@ class TriggerRuleLogDAO:
             if log.dedupe_key:
                 duplicate_log_id = self._get_duplicate_log_id(log.dedupe_key)
                 if duplicate_log_id:
-                    logger.info(
-                        "Skip duplicate trigger rule log: existing_id=%s, rule_id=%s, status=%s, reason_code=%s",
+                    self.db_connector.execute_update(
+                        "UPDATE trigger_rule_log SET timestamp = ? WHERE id = ?",
+                        (log.timestamp, duplicate_log_id)
+                    )
+                    logger.debug(
+                        "Skip duplicate trigger rule log and update timestamp: existing_id=%s, rule_id=%s, status=%s, reason_code=%s",
                         duplicate_log_id, log.trigger_rule_id, log.status, log.reason_code
                     )
                     return duplicate_log_id
@@ -406,13 +410,14 @@ class TriggerRuleLogDAO:
             dedupe_key = None
             if status == TriggerRuleLogStatus.FAILED:
                 current_rows = self.db_connector.execute_query(
-                    "SELECT trigger_rule_id FROM trigger_rule_log WHERE id = ?",
+                    "SELECT trigger_rule_id, timestamp FROM trigger_rule_log WHERE id = ?",
                     (log_id,)
                 )
                 if not current_rows:
                     logger.warning("Trigger rule log not found for status update: id=%s", log_id)
                     return False
 
+                current_timestamp = current_rows[0]["timestamp"]
                 dedupe_key = "|".join([
                     current_rows[0]["trigger_rule_id"],
                     status,
@@ -428,10 +433,15 @@ class TriggerRuleLogDAO:
                     (dedupe_key, log_id)
                 )
                 if duplicate_rows:
+                    duplicate_id = duplicate_rows[0]["id"]
+                    self.db_connector.execute_update(
+                        "UPDATE trigger_rule_log SET timestamp = ? WHERE id = ?",
+                        (current_timestamp, duplicate_id)
+                    )
                     self.delete_by_id(log_id)
                     logger.info(
-                        "Deleted duplicate trigger rule log after status update: id=%s, duplicate_id=%s",
-                        log_id, duplicate_rows[0]["id"]
+                        "Deleted duplicate trigger rule log after status update and updated timestamp: id=%s, duplicate_id=%s",
+                        log_id, duplicate_id
                     )
                     return True
 

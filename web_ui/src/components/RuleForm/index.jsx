@@ -115,11 +115,7 @@ const RuleForm = ({
       if (initialSelectedKeys && initialSelectedKeys.length > 0) {
         setSelectedActions(initialSelectedKeys);
       } else {
-        const actionKeys = selectedActionObjects.map(action => {
-          const serverName = action.mcp_server_name || 'unknown';
-          return `${serverName}#${action.introduction}`;
-        });
-        setSelectedActions(actionKeys);
+        setSelectedActions([]);
       }
 
       if (formData.notify?.content) {
@@ -150,7 +146,8 @@ const RuleForm = ({
         setTriggerIntervalSeconds(2);
       }
     }
-  }, [mode, formData, form, initialSelectedKeys, selectedActionObjects]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, formData, form, initialSelectedKeys]);
 
 
 

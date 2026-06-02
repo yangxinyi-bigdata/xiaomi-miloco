@@ -4,7 +4,7 @@
 
 ```bash
 docker build --build-arg PIP_INDEX_URL=https://pypi.org/simple \
-  -t xiaomi/miloco-backend:local \
+  -t yangxinyi-bigdata/miloco-backend:local \
   --target backend -f docker/backend.Dockerfile .
 ```
 
@@ -21,7 +21,7 @@ docker buildx build \
 ## 直接用本地镜像启动
 
 ```bash
-BACKEND_IMAGE=xiaomi/miloco-backend:local \
+BACKEND_IMAGE=yangxinyi-bigdata/miloco-backend:local \
   docker compose -f docker/docker-compose-local.yaml up -d
 ```
 

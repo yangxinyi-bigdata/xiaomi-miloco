@@ -1,7 +1,7 @@
 services:
   backend:
     container_name: miloco-backend
-    image: ${BACKEND_IMAGE:-xiaomi/miloco-backend:local}
+    image: ${BACKEND_IMAGE:-yangxinyi-bigdata/miloco-backend:local}
     # MUST be host for MIoT device discovery.
     network_mode: host
     expose:

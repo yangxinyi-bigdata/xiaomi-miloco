@@ -315,7 +315,7 @@ class MCPClientManager:
     async def _verify_client_connection(self, client_id: str, client: MCPClientBase) -> bool:
         """Verify client connection status"""
         try:
-            return await asyncio.wait_for(client.ping(), timeout=1.0)
+            return await asyncio.wait_for(client.ping(), timeout=5.0)
         except asyncio.TimeoutError:
             logger.debug("Client %s ping timeout", client_id)
             return False

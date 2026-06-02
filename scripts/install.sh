@@ -16,8 +16,8 @@ MIRROR_GET_DOCKER="Aliyun" # Aliyun|AzureChinaCloud
 FDS_BASE_URL="${FDS_BASE_URL:-https://xiaomi-miloco.cnbj1.mi-fds.com/xiaomi-miloco}"
 CDN_BASE_URL="${CDN_BASE_URL:-https://cdn.cnbj1.fds.api.mi-img.com/xiaomi-miloco}"
 DOCKER_CMD="docker"
-DOCKER_IMAGE_BACKEND_NAME="xiaomi/${PROJECT_CODE}-backend"
-DOCKER_IMAGE_AI_ENGINE_NAME="xiaomi/${PROJECT_CODE}-ai_engine"
+DOCKER_IMAGE_BACKEND_NAME="yangxinyi-bigdata/${PROJECT_CODE}-backend"
+DOCKER_IMAGE_AI_ENGINE_NAME="yangxinyi-bigdata/${PROJECT_CODE}-ai_engine"
 DOCKER_IMAGES=("${DOCKER_IMAGE_BACKEND_NAME}" "${DOCKER_IMAGE_AI_ENGINE_NAME}")
 DOCKER_CONTAINERS=("${PROJECT_CODE}-backend" "${PROJECT_CODE}-ai_engine")
 
@@ -842,6 +842,8 @@ def merge_known_keys(base, old):
             key: merge_known_keys(value, old[key]) if key in old else value
             for key, value in base.items()
         }
+    if type(base) != type(old) and base is not None and old is not None:
+        return base
     return old
 
 base_config = load_yaml(image_config_path)
@@ -1242,10 +1244,29 @@ install_service(){
         mv "${INSTALL_FULL_DIR}/.env" "${INSTALL_FULL_DIR}/.env.bak"
         print_info "Backup .env file: ${INSTALL_FULL_DIR}/.env.bak"
     fi
-    wget -O "${INSTALL_FULL_DIR}/${DOCKER_COMPOSE_FILE}" "${FDS_BASE_URL}/docker-compose-${INSTALL_MODE}.yaml"
-    print_log "Get docker-compose.yaml completed: ${INSTALL_FULL_DIR}/${DOCKER_COMPOSE_FILE}"
-    wget -O "${INSTALL_FULL_DIR}/.env" "${FDS_BASE_URL}/.env.example"
-    print_log "Get .env completed: ${INSTALL_FULL_DIR}/.env"
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local project_dir="$(dirname "${script_dir}")"
+    local local_compose_file="${project_dir}/docker/docker-compose.yaml"
+    if [ "${INSTALL_MODE}" == "lite" ]; then
+        local_compose_file="${project_dir}/docker/docker-compose-lite.yaml"
+    fi
+    local local_env_file="${project_dir}/docker/.env.example"
+
+    if [ -f "${local_compose_file}" ]; then
+        cp "${local_compose_file}" "${INSTALL_FULL_DIR}/${DOCKER_COMPOSE_FILE}"
+        print_log "Copy local docker-compose.yaml completed: ${INSTALL_FULL_DIR}/${DOCKER_COMPOSE_FILE}"
+    else
+        wget -O "${INSTALL_FULL_DIR}/${DOCKER_COMPOSE_FILE}" "${FDS_BASE_URL}/docker-compose-${INSTALL_MODE}.yaml"
+        print_log "Download docker-compose.yaml completed: ${INSTALL_FULL_DIR}/${DOCKER_COMPOSE_FILE}"
+    fi
+
+    if [ -f "${local_env_file}" ]; then
+        cp "${local_env_file}" "${INSTALL_FULL_DIR}/.env"
+        print_log "Copy local .env.example completed: ${INSTALL_FULL_DIR}/.env"
+    else
+        wget -O "${INSTALL_FULL_DIR}/.env" "${FDS_BASE_URL}/.env.example"
+        print_log "Download .env completed: ${INSTALL_FULL_DIR}/.env"
+    fi
     # Replace .env variables
     sed -i "s/^BACKEND_PORT=.*/BACKEND_PORT=${BACKEND_PORT}/" "${INSTALL_FULL_DIR}/.env"
     if [ "${INSTALL_MODE}" == "full" ]; then

@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
-IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-xiaomi/miloco-backend}"
+IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-yangxinyi-bigdata/miloco-backend}"
 IMAGE_TAG="${IMAGE_TAG:-local}"
 BACKEND_IMAGE="${IMAGE_REPOSITORY}:${IMAGE_TAG}"
 OUTPUT_DIR="${1:-$PROJECT_ROOT/dist/docker}"
